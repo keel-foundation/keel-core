@@ -1,0 +1,9 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: keel-foundation/.github/.github/workflows/go-ci.yml@main
