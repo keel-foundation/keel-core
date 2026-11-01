@@ -13,12 +13,12 @@ import (
 )
 
 func main() {
-	dsn := config.EnvOrDefault("TUBEKEEL_DATABASE_URL", config.DefaultDatabaseURL)
+	dsn := config.EnvOrDefault("KEELTUBE_DATABASE_URL", config.DefaultDatabaseURL)
 	pipelineURL := strings.TrimRight(
-		config.EnvOrDefault("TUBEKEEL_PIPELINE_PUBLIC_URL", "http://localhost:8081"), "/",
+		config.EnvOrDefault("KEELTUBE_PIPELINE_PUBLIC_URL", "http://localhost:8081"), "/",
 	)
 	webURL := strings.TrimRight(
-		config.EnvOrDefault("TUBEKEEL_WEB_PUBLIC_URL", "http://localhost:3000"), "/",
+		config.EnvOrDefault("KEELTUBE_WEB_PUBLIC_URL", "http://localhost:3000"), "/",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

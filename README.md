@@ -19,20 +19,20 @@ search, and full OIDC auth are not implemented yet.
 | `GET` | `/api/v1/demo` | Demo video and channel |
 | `GET` | `/api/v1/me` | Current dev principal |
 
-`/api/v1/me` uses the dev-only auth adapter. When `TUBEKEEL_DEV_ACTOR_TOKEN` is set, a matching
+`/api/v1/me` uses the dev-only auth adapter. When `KEELTUBE_DEV_ACTOR_TOKEN` is set, a matching
 `Authorization: Bearer <token>` is required. This is not production authentication.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TUBEKEEL_CORE_ADDR` | `127.0.0.1:8080` | Listen address |
-| `TUBEKEEL_DATABASE_URL` | `postgres://tubekeel:tubekeel-dev@127.0.0.1:5432/tubekeel?sslmode=disable` | PostgreSQL DSN |
-| `TUBEKEEL_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
-| `TUBEKEEL_DEV_ACTOR_ID` | `usr_demo` | Dev auth principal |
-| `TUBEKEEL_DEV_ACTOR_TOKEN` | unset | Optional dev bearer token |
-| `TUBEKEEL_PIPELINE_PUBLIC_URL` | `http://localhost:8081` | Playback base URL used by the seed |
-| `TUBEKEEL_WEB_PUBLIC_URL` | `http://localhost:3000` | Captions base URL used by the seed |
+| `KEELTUBE_CORE_ADDR` | `127.0.0.1:8080` | Listen address |
+| `KEELTUBE_DATABASE_URL` | `postgres://keeltube:keeltube-dev@127.0.0.1:5432/keeltube?sslmode=disable` | PostgreSQL DSN |
+| `KEELTUBE_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
+| `KEELTUBE_DEV_ACTOR_ID` | `usr_demo` | Dev auth principal |
+| `KEELTUBE_DEV_ACTOR_TOKEN` | unset | Optional dev bearer token |
+| `KEELTUBE_PIPELINE_PUBLIC_URL` | `http://localhost:8081` | Playback base URL used by the seed |
+| `KEELTUBE_WEB_PUBLIC_URL` | `http://localhost:3000` | Captions base URL used by the seed |
 
 ## Run locally
 
@@ -54,11 +54,11 @@ The seed is idempotent and creates `usr_demo`, `ch_demo`, `vid_demo_001`,
 
 ## Tests
 
-The database tests require PostgreSQL. Set `TUBEKEEL_TEST_DATABASE_URL` and run packages
+The database tests require PostgreSQL. Set `KEELTUBE_TEST_DATABASE_URL` and run packages
 sequentially so the shared test tables do not overlap:
 
 ```sh
-TUBEKEEL_TEST_DATABASE_URL=postgres://tubekeel:tubekeel-dev@127.0.0.1:5432/tubekeel?sslmode=disable \
+KEELTUBE_TEST_DATABASE_URL=postgres://keeltube:keeltube-dev@127.0.0.1:5432/keeltube?sslmode=disable \
   go test -p 1 ./...
 ```
 

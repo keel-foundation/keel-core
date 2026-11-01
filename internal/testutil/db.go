@@ -12,9 +12,9 @@ import (
 func Open(t *testing.T) *sql.DB {
 	t.Helper()
 
-	dsn := os.Getenv("TUBEKEEL_TEST_DATABASE_URL")
+	dsn := os.Getenv("KEELTUBE_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set TUBEKEEL_TEST_DATABASE_URL to run database tests")
+		t.Skip("set KEELTUBE_TEST_DATABASE_URL to run database tests")
 	}
 
 	ctx := context.Background()

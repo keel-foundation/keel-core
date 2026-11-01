@@ -16,7 +16,7 @@ import (
 )
 
 func allowedOrigins() []string {
-	raw := config.EnvOrDefault("TUBEKEEL_CORS_ORIGINS", "http://localhost:3000")
+	raw := config.EnvOrDefault("KEELTUBE_CORS_ORIGINS", "http://localhost:3000")
 	parts := strings.Split(raw, ",")
 	origins := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -28,8 +28,8 @@ func allowedOrigins() []string {
 }
 
 func main() {
-	addr := config.EnvOrDefault("TUBEKEEL_CORE_ADDR", "127.0.0.1:8080")
-	dsn := config.EnvOrDefault("TUBEKEEL_DATABASE_URL", config.DefaultDatabaseURL)
+	addr := config.EnvOrDefault("KEELTUBE_CORE_ADDR", "127.0.0.1:8080")
+	dsn := config.EnvOrDefault("KEELTUBE_DATABASE_URL", config.DefaultDatabaseURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -45,8 +45,8 @@ func main() {
 	}
 
 	authenticator := auth.NewDev(
-		config.EnvOrDefault("TUBEKEEL_DEV_ACTOR_ID", "usr_demo"),
-		os.Getenv("TUBEKEEL_DEV_ACTOR_TOKEN"),
+		config.EnvOrDefault("KEELTUBE_DEV_ACTOR_ID", "usr_demo"),
+		os.Getenv("KEELTUBE_DEV_ACTOR_TOKEN"),
 	)
 
 	server := &http.Server{
@@ -58,6 +58,6 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("tubekeel core listening on %s", addr)
+	log.Printf("keeltube core listening on %s", addr)
 	log.Fatal(server.ListenAndServe())
 }
