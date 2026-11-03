@@ -20,9 +20,20 @@ import (
 
 func newHandler(t *testing.T, token string) http.Handler {
 	t.Helper()
+	handler, _ := newHandlerWithStore(t, token)
+	return handler
+}
+
+func newHandlerWithStore(t *testing.T, token string) (http.Handler, *store.Store) {
+	t.Helper()
+	return newHandlerWithOptions(t, token, "")
+}
+
+func newHandlerWithOptions(t *testing.T, token, internalToken string) (http.Handler, *store.Store) {
+	t.Helper()
 	conn := testutil.Open(t)
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	identityService := identity.New(st, mailer.NewLog(io.Discard), testIdentityConfig())
@@ -32,12 +43,13 @@ func newHandler(t *testing.T, token string) http.Handler {
 		AllowSecondary: true,
 	}
 	return api.New(api.Options{
-		Store:      st,
-		Auth:       authenticator,
-		Identity:   identityService,
-		Origins:    []string{"http://localhost:3000"},
-		RateWindow: time.Minute,
-	})
+		Store:         st,
+		Auth:          authenticator,
+		Identity:      identityService,
+		InternalToken: internalToken,
+		Origins:       []string{"http://localhost:3000"},
+		RateWindow:    time.Minute,
+	}), st
 }
 
 func testIdentityConfig() identity.Config {

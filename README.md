@@ -30,7 +30,8 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_DEV_ACTOR_ID` | `usr_demo` | Dev fallback principal |
 | `KEELTUBE_DEV_ACTOR_TOKEN` | unset | Optional dev bearer token |
 | `KEELTUBE_AUTH_ALLOW_DEV` | enabled when the dev token is set | Allow the fixed dev principal |
-| `KEELTUBE_PIPELINE_PUBLIC_URL` | `http://localhost:8081` | Playback base URL used by the seed |
+| `KEELTUBE_DEMO_MEDIA_URL` | web demo sample | Optional seeded demo playback URL |
+| `KEELTUBE_WORKER_ADDR` | `127.0.0.1:8083` | Media worker `/health` and `/status` address |
 | `KEELTUBE_WEB_PUBLIC_URL` | `http://localhost:3000` | Captions base URL used by the seed |
 | `KEELTUBE_EMBEDDINGS_URL` | unset | `keel-embeddings` base URL; unset uses the in-process hash embedder |
 | `KEELTUBE_EMBEDDINGS_TOKEN` | unset | Bearer token for `keel-embeddings`; must match the service |
@@ -49,6 +50,8 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_UPLOAD_TTL_SECONDS` | `86400` | Upload session lifetime; must exceed the presign lifetime |
 | `KEELTUBE_MEDIA_PART_SIZE_MB` | `64` | Multipart upload part size, minimum 5 |
 | `KEELTUBE_MEDIA_MAX_UPLOAD_MB` | `20480` | Maximum source file size |
+| `KEELTUBE_MEDIA_RETAIN_SOURCE` | `false` | Keep source objects after successful processing |
+| `KEELTUBE_MEDIA_JOB_RETENTION_DAYS` | `7` | Prune completed media jobs after this many days |
 | `KEELTUBE_MEDIA_MAX_DURATION_SECONDS` | `14400` | Maximum source duration |
 | `KEELTUBE_MEDIA_MIN_DURATION_SECONDS` | `1` | Minimum source duration |
 | `KEELTUBE_MEDIA_WORKERS` | `2` | In-process media worker count |
@@ -67,6 +70,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_SCANNER_TOKEN` | unset | Bearer token for the external scanner |
 | `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
 | `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
+| `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for the internal notification-ingest endpoint; unset disables the route |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -111,6 +115,7 @@ cp .env.example .env
 # edit .env
 go run ./cmd/seed
 go run ./cmd/api
+go run ./cmd/worker   # separate process; requires KEELTUBE_MEDIA_S3_*
 ```
 
 This standalone workflow is optional. The maintainer devstack uses
@@ -155,8 +160,8 @@ matching migration.
 
 ## Docker
 
-The private dev stack builds and runs core, the seed, embeddings, pipeline, moderation, and
-PostgreSQL. Supply the database and mail settings through the stack's environment file.
+The private dev stack builds and runs core, the seed, embeddings, moderation, PostgreSQL, and an
+optional media worker. Supply the database and mail settings through the stack's environment file.
 
 ## Engagement
 
@@ -188,6 +193,28 @@ remain available to anonymous viewers.
 `POST /api/v1/videos/{id}/view` records watch history and starts a telemetry session. The public
 view counter increments only for the first session per viewer and video within 30 minutes; repeat
 sessions still contribute watch-time analytics.
+
+## Notifications
+
+Creator notifications are stored in PostgreSQL and scoped to the authenticated actor. The web shell
+reads them through the session cookie; no moderation token is involved.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/me/notifications?limit=&offset=&unread=` | List notifications and the unread count |
+| `GET` | `/api/v1/me/notifications/unread-count` | Read only the unread count |
+| `POST` | `/api/v1/me/notifications/{id}/read` | Mark one own notification read |
+| `POST` | `/api/v1/me/notifications/read-all` | Mark all own notifications read |
+| `POST` | `/internal/v1/notifications` | Service-to-service notification ingest; requires `KEELTUBE_INTERNAL_TOKEN` |
+
+Core creates notifications for new comments, replies, completed uploads, and failed uploads.
+Moderation and future finance services can push creator-safe notifications through the internal
+route with idempotency provided by `dedupe_key`. The internal route is not registered when `KEELTUBE_INTERNAL_TOKEN` is
+unset. It validates that a supplied `channel_id` belongs to the target actor.
+
+Notification rows carry `id`, `kind`, `title`, `body`, `href`, `read`, `read_at`, and `created_at`.
+The page response also includes `unread_count`, so the web client can render the badge without a
+second request.
 
 ## Watch telemetry and creator analytics
 
@@ -221,13 +248,35 @@ aggregates.
 Analytics range parameters are `from` and `to` in `YYYY-MM-DD` form. The default range is the last
 28 UTC days; the maximum range is 366 days. Creator analytics require the studio owner session.
 
+## Media worker
+
+`cmd/worker` is the only process that runs FFmpeg. It shares the database and object store with the
+API but scales independently:
+
+- Downloads each source once per processing attempt.
+- Scans, probes, and transcodes from that local copy.
+- Renews its job lease while running and fences completion/retry updates by worker and attempt.
+- Backs off with jitter when the queue is empty instead of polling every worker every two seconds.
+- Exposes `GET /health` and `GET /status` on `KEELTUBE_WORKER_ADDR`; `/status` reports queue depth.
+- Prunes completed media jobs in batches after `KEELTUBE_MEDIA_JOB_RETENTION_DAYS`.
+- Deletes successful source objects unless `KEELTUBE_MEDIA_RETAIN_SOURCE=true`.
+
+The API process never starts media workers. Scaling HTTP replicas therefore does not multiply
+FFmpeg processes or temp-disk usage.
+
 ## Creator Studio and media engine
 
 The studio module adds creator-scoped video management, immutable edit versions, resumable
 S3-compatible multipart uploads, deterministic copyright/policy checks, and background HLS
-transcoding. The media engine lives in `internal/media` and runs in-process with a PostgreSQL-backed
-job queue. Upload bytes go directly from the browser to the bucket through short-lived presigned
-part URLs; core never proxies media bytes.
+transcoding. The media engine lives in `internal/media`; the API process only signs uploads and
+serves playback, while `cmd/worker` runs the PostgreSQL-backed job queue. Upload bytes go directly
+from the browser to the bucket through short-lived presigned part URLs; core never proxies media
+bytes.
+
+A processing job downloads each source exactly once per attempt, then scans, probes, and transcodes it. A retry after a failure starts a new attempt and downloads again; a successful scan never triggers a second transcode download. The
+worker renews its job lease while running and uses fencing so a stale worker cannot finish or retry
+a reclaimed job. Completed jobs are pruned after `KEELTUBE_MEDIA_JOB_RETENTION_DAYS`, and successful
+source objects are deleted unless `KEELTUBE_MEDIA_RETAIN_SOURCE=true`.
 
 The bucket is private. Playback URLs point at core, which checks video access and redirects to a
 short-lived presigned S3 GET. HLS manifests are streamed by core and segments are redirected, so
@@ -241,7 +290,7 @@ gateway and become the video's `captions_url` when finalized.
 | `GET` | `/api/v1/studio/channel` | Current creator channel |
 | `GET` | `/api/v1/studio/videos` | All own videos, including drafts and processing |
 | `POST` | `/api/v1/studio/videos` | Create a draft |
-| `GET` | `/api/v1/studio/videos/{id}` | Read an own video |
+| `GET` | `/api/v1/studio/videos/{id}` | Read an own video with rights, subtitles, and versions |
 | `PATCH` | `/api/v1/studio/videos/{id}` | Update title, description, visibility, category, license, format, tags |
 | `POST` | `/api/v1/studio/videos/{id}/publish` | Publish a ready video |
 | `POST` | `/api/v1/studio/videos/{id}/unpublish` | Make a published video private |
@@ -261,6 +310,10 @@ gateway and become the video's `captions_url` when finalized.
 | `POST` | `/api/v1/studio/uploads/{id}/parts` | Refresh presigned part URLs for a long upload |
 | `POST` | `/api/v1/studio/uploads/{id}/complete` | Complete multipart upload and enqueue scanning |
 | `DELETE` | `/api/v1/studio/uploads/{id}` | Abort an in-progress upload |
+
+`GET /api/v1/studio/videos/{id}` is the creator edit aggregate. It returns the standard video fields
+at the top level plus `rights`, `subtitles`, and `versions`, so the editor does not need three
+separate round trips. `rights` is present only when the video has a rights declaration.
 
 Subtitle playback is served by `GET /api/v1/media/{id}/subtitles/{track_id}` through the same
 private media gateway as HLS and MP4 playback.

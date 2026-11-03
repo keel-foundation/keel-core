@@ -22,6 +22,7 @@ type Config struct {
 	UploadTTL           time.Duration
 	PartSize            int64
 	MaxUploadBytes      int64
+	RetainSource        bool
 	MaxDurationSeconds  int
 	MinDurationSeconds  int
 	Workers             int
@@ -79,6 +80,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.MaxUploadBytes, err = megabytesEnv(getenv, "KEELTUBE_MEDIA_MAX_UPLOAD_MB", 20480); err != nil {
 		return Config{}, err
 	}
+	cfg.RetainSource = boolEnv(getenv, "KEELTUBE_MEDIA_RETAIN_SOURCE", false)
 	if cfg.MaxDurationSeconds, err = intEnv(getenv, "KEELTUBE_MEDIA_MAX_DURATION_SECONDS", 14400); err != nil {
 		return Config{}, err
 	}
@@ -96,6 +98,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if cfg.JobLease, err = durationEnv(getenv, "KEELTUBE_MEDIA_JOB_LEASE_SECONDS", 30*time.Minute); err != nil {
 		return Config{}, err
+	}
+	if cfg.JobLease < 15*time.Second {
+		return Config{}, fmt.Errorf("KEELTUBE_MEDIA_JOB_LEASE_SECONDS must be at least 15 seconds")
 	}
 	if cfg.MaxRenditionHeight, err = intEnv(getenv, "KEELTUBE_MEDIA_MAX_RENDITION_HEIGHT", 1080); err != nil {
 		return Config{}, err

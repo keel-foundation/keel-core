@@ -531,7 +531,33 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		s.writeEngagementError(w, err)
 		return
 	}
+	s.notifyComment(r.Context(), comment, video, parentID)
 	writeJSON(w, http.StatusCreated, comment)
+}
+
+func (s *Server) notifyComment(
+	ctx context.Context,
+	comment store.Comment,
+	video store.Video,
+	parentID *string,
+) {
+	if s.notifications == nil {
+		return
+	}
+	var parent *store.Comment
+	if parentID != nil {
+		value, err := s.store.GetComment(ctx, *parentID)
+		if err != nil {
+			log.Printf("notifications: load parent comment %s: %v", *parentID, err)
+			return
+		}
+		parent = &value
+	}
+	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.notifications.Comment(notifyCtx, comment, video, parent); err != nil {
+		log.Printf("notifications: comment %s: %v", comment.ID, err)
+	}
 }
 
 func (s *Server) likeComment(w http.ResponseWriter, r *http.Request) {

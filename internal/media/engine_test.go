@@ -27,6 +27,7 @@ type fakeStorage struct {
 	aborted      int
 	completed    int
 	deleted      int
+	getsByKey    map[string]int
 	objects      map[string][]byte
 	sizes        map[string]int64
 	contentTypes map[string]string
@@ -69,6 +70,10 @@ func (f *fakeStorage) HeadObject(_ context.Context, key string) (ObjectInfo, err
 }
 
 func (f *fakeStorage) GetObject(_ context.Context, key string) (io.ReadCloser, error) {
+	if f.getsByKey == nil {
+		f.getsByKey = make(map[string]int)
+	}
+	f.getsByKey[key]++
 	return io.NopCloser(bytes.NewReader(f.objects[key])), nil
 }
 
@@ -115,7 +120,7 @@ func TestEngineCreateCompleteAndAbortUpload(t *testing.T) {
 	conn := testutil.Open(t)
 	defer conn.Close()
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	fake := &fakeStorage{size: 6 * 1024 * 1024, contentType: "video/mp4"}
@@ -166,8 +171,8 @@ func TestEngineCreateCompleteAndAbortUpload(t *testing.T) {
 	}
 
 	job, ok, err := st.ClaimMediaJob(ctx, "worker", time.Now().UTC(), time.Hour)
-	if err != nil || !ok || job.Kind != "scan" {
-		t.Fatalf("claim scan job: ok=%v job=%+v err=%v", ok, job, err)
+	if err != nil || !ok || job.Kind != "process" {
+		t.Fatalf("claim process job: ok=%v job=%+v err=%v", ok, job, err)
 	}
 
 	second, err := engine.CreateUpload(ctx, "ch_demo", "usr_demo", CreateUploadInput{
@@ -197,7 +202,7 @@ func TestEngineRejectsPolicyAndInvalidInput(t *testing.T) {
 	conn := testutil.Open(t)
 	defer conn.Close()
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	cfg := testMediaConfig(t)
@@ -236,7 +241,7 @@ func TestEngineProcessesUploadToPublishedHLS(t *testing.T) {
 	conn := testutil.Open(t)
 	defer conn.Close()
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	dir := t.TempDir()
@@ -308,14 +313,8 @@ func TestEngineProcessesUploadToPublishedHLS(t *testing.T) {
 	}
 
 	job, ok, err := st.ClaimMediaJob(ctx, "worker", time.Now().UTC(), time.Hour)
-	if err != nil || !ok || job.Kind != "scan" {
-		t.Fatalf("claim scan: ok=%v job=%+v err=%v", ok, job, err)
-	}
-	engine.runJob(ctx, job)
-
-	job, ok, err = st.ClaimMediaJob(ctx, "worker", time.Now().UTC(), time.Hour)
-	if err != nil || !ok || job.Kind != "transcode" {
-		t.Fatalf("claim transcode: ok=%v job=%+v err=%v", ok, job, err)
+	if err != nil || !ok || job.Kind != "process" {
+		t.Fatalf("claim process: ok=%v job=%+v err=%v", ok, job, err)
 	}
 	engine.runJob(ctx, job)
 
@@ -342,10 +341,19 @@ func TestEngineProcessesUploadToPublishedHLS(t *testing.T) {
 	if !strings.HasPrefix(video.ContentHash, "sha256:") {
 		t.Fatalf("unexpected content hash: %q", video.ContentHash)
 	}
-	for _, kind := range []string{"mp4", "hls", "thumbnail", "source"} {
+	for _, kind := range []string{"mp4", "hls", "thumbnail"} {
 		if _, found, err := st.GetMediaAsset(ctx, video.ID, kind); err != nil || !found {
 			t.Fatalf("missing asset %s: found=%v err=%v", kind, found, err)
 		}
+	}
+	if _, found, err := st.GetMediaAsset(ctx, video.ID, "source"); err != nil || found {
+		t.Fatalf("source asset should be removed after processing: found=%v err=%v", found, err)
+	}
+	if fake.deleted != 1 {
+		t.Fatalf("expected the source object to be deleted once, got %d", fake.deleted)
+	}
+	if fake.getsByKey[session.Key] != 1 {
+		t.Fatalf("expected one source download, got %d", fake.getsByKey[session.Key])
 	}
 	thumbnailAsset, found, err := st.GetMediaAsset(ctx, video.ID, "thumbnail")
 	if err != nil || !found {
@@ -366,7 +374,7 @@ func TestEngineSubtitleLifecycle(t *testing.T) {
 	conn := testutil.Open(t)
 	defer conn.Close()
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	fake := &fakeStorage{size: 128, contentType: "text/vtt"}
@@ -420,7 +428,7 @@ func TestEngineCustomThumbnailLifecycle(t *testing.T) {
 	conn := testutil.Open(t)
 	defer conn.Close()
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	imageBytes := testPNG(t)

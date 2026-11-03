@@ -15,7 +15,7 @@ func TestSeedAndReadBack(t *testing.T) {
 	st := store.New(conn)
 	ctx := context.Background()
 
-	if err := seed.Run(ctx, st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(ctx, st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -41,6 +41,21 @@ func TestSeedAndReadBack(t *testing.T) {
 		t.Fatalf("unexpected channel stats: %+v", channel)
 	}
 
+	byHandle, err := st.GetChannel(ctx, "@maravale")
+	if err != nil {
+		t.Fatalf("get channel by handle: %v", err)
+	}
+	if byHandle.ID != channel.ID {
+		t.Fatalf("unexpected channel by handle: %+v", byHandle)
+	}
+	byBareHandle, err := st.GetChannel(ctx, "maravale")
+	if err != nil {
+		t.Fatalf("get channel by bare handle: %v", err)
+	}
+	if byBareHandle.ID != channel.ID {
+		t.Fatalf("unexpected channel by bare handle: %+v", byBareHandle)
+	}
+
 	video, err := st.GetVideo(ctx, "vid_demo_001")
 	if err != nil {
 		t.Fatalf("get video: %v", err)
@@ -60,10 +75,10 @@ func TestSeedAndReadBack(t *testing.T) {
 	if video.Views != 1_842_000 || video.Likes != 182_400 || video.CommentsCount != 1_284 {
 		t.Fatalf("unexpected video counters: %+v", video)
 	}
-	if video.Playback.MP4URL != "http://localhost:8081/demo/sample.mp4" {
+	if video.Playback.MP4URL != "http://localhost:3000/media/ksKCMmvOxwQ.mp4" {
 		t.Fatalf("unexpected playback: %+v", video.Playback)
 	}
-	if video.Playback.CaptionsURL != "http://localhost:3000/demo/sample.vtt" {
+	if video.Playback.CaptionsURL != "http://localhost:3000/media/mock-captions.vtt" {
 		t.Fatalf("unexpected captions URL: %+v", video.Playback)
 	}
 	if video.Policy == nil || video.Policy.PolicyVersion != "demo-0.1" {

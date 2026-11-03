@@ -28,7 +28,7 @@ func Open(t *testing.T) *sql.DB {
 		t.Fatalf("migrate test database: %v", err)
 	}
 	if _, err := conn.ExecContext(ctx, `
-		TRUNCATE video_view_events, video_view_sessions, discovery_events,
+		TRUNCATE notifications, video_view_events, video_view_sessions, discovery_events,
 		         video_daily_analytics, media_scans, media_jobs, media_assets,
 		         video_subtitles, video_versions, media_uploads, media_blocklist,
 		         comment_likes, comments, watch_history, saved_videos, video_reactions,

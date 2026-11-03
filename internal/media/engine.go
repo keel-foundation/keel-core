@@ -13,6 +13,7 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -83,6 +84,7 @@ type Engine struct {
 	scanner    Scanner
 	processor  Processor
 	OnPublish  func(context.Context, string) error
+	OnFailure  func(context.Context, string, string) error
 	workerName string
 }
 
@@ -804,27 +806,71 @@ func (e *Engine) sweeper(ctx context.Context) {
 }
 
 func (e *Engine) worker(ctx context.Context, workerID string) {
-	ticker := time.NewTicker(e.cfg.PollInterval)
-	defer ticker.Stop()
+	idle := 0
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
-			for {
-				job, ok, err := e.store.ClaimMediaJob(ctx, workerID, time.Now().UTC(), e.cfg.JobLease)
-				if err != nil {
-					if !errors.Is(err, context.Canceled) {
-						log.Printf("media worker %s: claim job: %v", workerID, err)
-					}
-					break
-				}
-				if !ok {
-					break
-				}
-				e.runJob(ctx, job)
-			}
 		}
+		job, ok, err := e.store.ClaimMediaJob(
+			ctx, workerID, time.Now().UTC(), e.cfg.JobLease,
+		)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("media worker %s: claim job: %v", workerID, err)
+			}
+			idle++
+			if !sleepContext(ctx, e.workerBackoff(idle)) {
+				return
+			}
+			continue
+		}
+		if !ok {
+			idle++
+			if !sleepContext(ctx, e.workerBackoff(idle)) {
+				return
+			}
+			continue
+		}
+		idle = 0
+		e.runJob(ctx, job)
+	}
+}
+
+func (e *Engine) workerBackoff(idle int) time.Duration {
+	base := e.cfg.PollInterval
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	maximum := 30 * time.Second
+	if idle < 1 {
+		idle = 1
+	}
+	shift := idle - 1
+	if shift > 5 {
+		shift = 5
+	}
+	delay := base * time.Duration(1<<uint(shift))
+	if delay > maximum {
+		delay = maximum
+	}
+	if delay <= 0 {
+		return base
+	}
+	jitter := time.Duration(rand.Int63n(int64(delay/4) + 1))
+	if delay+jitter > maximum {
+		return maximum
+	}
+	return delay + jitter
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -834,6 +880,15 @@ func (e *Engine) failUpload(uploadID, videoID, message string) {
 	now := time.Now().UTC()
 	_ = e.store.UpdateUploadStatus(ctx, uploadID, "failed", message, "", "", now)
 	_ = e.store.SetVideoStatus(ctx, videoID, "draft", now)
+	if e.OnFailure != nil {
+		go func(videoID, message string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := e.OnFailure(ctx, videoID, message); err != nil {
+				log.Printf("media failure callback for %s: %v", videoID, err)
+			}
+		}(videoID, message)
+	}
 }
 
 func (e *Engine) abortMultipart(key, uploadID string) {
@@ -862,6 +917,9 @@ func (e *Engine) expireUploads(ctx context.Context) {
 func (e *Engine) runJob(parent context.Context, job store.MediaJob) {
 	ctx, cancel := context.WithTimeout(parent, e.cfg.JobTimeout)
 	defer cancel()
+	heartbeatDone := make(chan struct{})
+	go e.heartbeatJob(job, cancel, heartbeatDone)
+	defer close(heartbeatDone)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			message := fmt.Sprintf("media job panic: %v", recovered)
@@ -871,10 +929,8 @@ func (e *Engine) runJob(parent context.Context, job store.MediaJob) {
 	}()
 	var err error
 	switch job.Kind {
-	case "scan":
-		err = e.scanJob(ctx, job)
-	case "transcode":
-		err = e.transcodeJob(ctx, job)
+	case "scan", "transcode", "process":
+		err = e.processJob(ctx, job)
 	default:
 		err = fmt.Errorf("unknown media job kind %q", job.Kind)
 	}
@@ -886,17 +942,63 @@ func (e *Engine) runJob(parent context.Context, job store.MediaJob) {
 	}
 	bookkeeping, cancelBookkeeping := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelBookkeeping()
-	if err := e.store.FinishMediaJob(bookkeeping, job.ID, now); err != nil {
+	if err := e.store.FinishMediaJob(bookkeeping, job.ID, job.LockedBy, job.Attempts, now); err != nil {
 		log.Printf("media job %d: finish: %v", job.ID, err)
+	}
+}
+
+func (e *Engine) heartbeatJob(
+	job store.MediaJob,
+	cancel context.CancelFunc,
+	done <-chan struct{},
+) {
+	interval := e.cfg.JobLease / 3
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			ctx, cancelHeartbeat := context.WithTimeout(context.Background(), 5*time.Second)
+			ok, err := e.store.RenewMediaJobLease(
+				ctx, job.ID, job.LockedBy, time.Now().UTC(),
+			)
+			cancelHeartbeat()
+			if err != nil {
+				log.Printf("media job %d: renew lease: %v", job.ID, err)
+				continue
+			}
+			if !ok {
+				log.Printf("media job %d: lease lost", job.ID)
+				cancel()
+				return
+			}
+		}
 	}
 }
 
 func (e *Engine) retryJob(job store.MediaJob, message string, now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	status, err := e.store.RetryMediaJob(ctx, job.ID, message, now.Add(jobBackoff(job.Attempts)), now)
+	status, err := e.store.RetryMediaJob(
+		ctx, job.ID, job.LockedBy, job.Attempts, message,
+		now.Add(jobBackoff(job.Attempts)), now,
+	)
 	if err != nil {
-		log.Printf("media job %d: retry: %v", job.ID, err)
+		if !errors.Is(err, store.ErrNotFound) {
+			log.Printf("media job %d: retry: %v", job.ID, err)
+		}
+		return
 	}
 	if status == "failed" {
 		e.failUpload(job.UploadID, job.VideoID, message)
@@ -917,7 +1019,38 @@ func jobBackoff(attempts int) time.Duration {
 	return delay
 }
 
-func (e *Engine) scanJob(ctx context.Context, job store.MediaJob) error {
+func (e *Engine) blockUpload(ctx context.Context, upload store.UploadIntent, video store.Video, scanner string, findings []Finding, digest string, size int64) error {
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return err
+	}
+	reason := findingsSummary(findings)
+	now := time.Now().UTC()
+	if err := e.store.RecordMediaScan(ctx, store.MediaScan{
+		UploadID:      upload.ID,
+		VideoID:       video.ID,
+		Scanner:       scanner,
+		Verdict:       VerdictBlock,
+		Findings:      findingsJSON,
+		ContentSHA256: digest,
+		SizeBytes:     size,
+		CreatedAt:     now,
+	}); err != nil {
+		return err
+	}
+	if err := e.store.UpdateUploadStatus(ctx, upload.ID, "blocked", reason, VerdictBlock, reason, now); err != nil {
+		return err
+	}
+	if err := e.store.UpdateVideoPolicy(ctx, video.ID, policyFor(video, "blocked", VerdictBlock, reason), now); err != nil {
+		return err
+	}
+	return e.store.SetVideoStatus(ctx, video.ID, "draft", now)
+}
+
+// processJob downloads each source exactly once, then scans, probes, and
+// transcodes it. Legacy scan/transcode jobs run through the same path so an
+// in-flight job upgraded during deployment still avoids a second download.
+func (e *Engine) processJob(ctx context.Context, job store.MediaJob) error {
 	upload, err := e.store.GetUploadByID(ctx, job.UploadID)
 	if err != nil {
 		return err
@@ -927,7 +1060,11 @@ func (e *Engine) scanJob(ctx context.Context, job store.MediaJob) error {
 		return err
 	}
 	tempDir, sourcePath, digest, size, err := e.downloadSource(ctx, upload)
-	defer func() { _ = os.RemoveAll(tempDir) }()
+	defer func() {
+		if tempDir != "" {
+			_ = os.RemoveAll(tempDir)
+		}
+	}()
 	if err != nil {
 		if errors.Is(err, errSizeMismatch) {
 			return e.blockUpload(ctx, upload, video, "size_check", []Finding{{
@@ -996,71 +1133,13 @@ func (e *Engine) scanJob(ctx context.Context, job store.MediaJob) error {
 		return err
 	}
 	reason := findingsSummary(result.Findings)
-	policy := policyFor(video, "processing", result.Verdict, reason)
-	if err := e.store.UpdateVideoPolicy(ctx, video.ID, policy, now); err != nil {
+	if err := e.store.UpdateVideoPolicy(ctx, video.ID, policyFor(video, "processing", result.Verdict, reason), now); err != nil {
 		return err
 	}
 	if err := e.store.UpdateUploadStatus(ctx, upload.ID, "processing", "", result.Verdict, reason, now); err != nil {
 		return err
 	}
-	publish := result.Verdict == VerdictAllow
-	payload, _ := json.Marshal(map[string]any{
-		"publish": publish,
-		"verdict": result.Verdict,
-	})
-	return e.store.EnqueueMediaJob(ctx, "transcode", upload.ID, video.ID, payload, now)
-}
 
-func (e *Engine) blockUpload(ctx context.Context, upload store.UploadIntent, video store.Video, scanner string, findings []Finding, digest string, size int64) error {
-	findingsJSON, err := json.Marshal(findings)
-	if err != nil {
-		return err
-	}
-	reason := findingsSummary(findings)
-	now := time.Now().UTC()
-	if err := e.store.RecordMediaScan(ctx, store.MediaScan{
-		UploadID:      upload.ID,
-		VideoID:       video.ID,
-		Scanner:       scanner,
-		Verdict:       VerdictBlock,
-		Findings:      findingsJSON,
-		ContentSHA256: digest,
-		SizeBytes:     size,
-		CreatedAt:     now,
-	}); err != nil {
-		return err
-	}
-	if err := e.store.UpdateUploadStatus(ctx, upload.ID, "blocked", reason, VerdictBlock, reason, now); err != nil {
-		return err
-	}
-	if err := e.store.UpdateVideoPolicy(ctx, video.ID, policyFor(video, "blocked", VerdictBlock, reason), now); err != nil {
-		return err
-	}
-	return e.store.SetVideoStatus(ctx, video.ID, "draft", now)
-}
-
-func (e *Engine) transcodeJob(ctx context.Context, job store.MediaJob) error {
-	upload, err := e.store.GetUploadByID(ctx, job.UploadID)
-	if err != nil {
-		return err
-	}
-	video, err := e.store.GetVideo(ctx, upload.VideoID)
-	if err != nil {
-		return err
-	}
-	tempDir, sourcePath, digest, size, err := e.downloadSource(ctx, upload)
-	defer func() { _ = os.RemoveAll(tempDir) }()
-	if err != nil {
-		return err
-	}
-	probe, err := e.processor.Probe(ctx, sourcePath)
-	if err != nil {
-		return err
-	}
-	findings := validateProbe(probe, e.cfg)
-	if len(findings) > 0 {
-		return e.blockUpload(ctx, upload, video, "media_probe", findings, digest, size)
-	}
 	output, err := e.processor.Process(ctx, sourcePath, probe)
 	if err != nil {
 		return err
@@ -1068,7 +1147,7 @@ func (e *Engine) transcodeJob(ctx context.Context, job store.MediaJob) error {
 	if output.MasterPath != "" {
 		defer func() { _ = os.RemoveAll(filepath.Dir(output.MasterPath)) }()
 	}
-	now := time.Now().UTC()
+	now = time.Now().UTC()
 	baseKey := e.videoBaseKey(video.ChannelID, video.ID)
 	hlsPrefix := baseKey + "/hls/"
 	if err := e.uploadProcessedOutput(ctx, baseKey, hlsPrefix, output); err != nil {
@@ -1108,20 +1187,24 @@ func (e *Engine) transcodeJob(ctx context.Context, job store.MediaJob) error {
 			return err
 		}
 	}
-	verdict := jobVerdict(job)
-	publish := jobPublish(job) && verdict == VerdictAllow
-	policy := policyFor(video, uploadStatus(publish, verdict), verdict, upload.ScanReason)
+	publish := result.Verdict == VerdictAllow
+	policy := policyFor(video, uploadStatus(publish, result.Verdict), result.Verdict, reason)
 	if _, err := e.store.FinalizeVideoProcessing(
 		ctx, video.ID, video.ChannelID, digest, output.DurationSeconds, playback, policy, publish, now,
 	); err != nil {
 		return err
 	}
 	status := "ready"
-	if verdict == VerdictReview {
+	if result.Verdict == VerdictReview {
 		status = "review"
 	}
-	if err := e.store.UpdateUploadStatus(ctx, upload.ID, status, "", verdict, policy.ScanReason, now); err != nil {
+	if err := e.store.UpdateUploadStatus(ctx, upload.ID, status, "", result.Verdict, reason, now); err != nil {
 		return err
+	}
+	if !e.cfg.RetainSource && result.Verdict == VerdictAllow {
+		if err := e.deleteSource(ctx, upload, video.ID); err != nil {
+			log.Printf("media source cleanup for %s: %v", video.ID, err)
+		}
 	}
 	if publish && e.OnPublish != nil {
 		go func(videoID string) {
@@ -1133,6 +1216,13 @@ func (e *Engine) transcodeJob(ctx context.Context, job store.MediaJob) error {
 		}(video.ID)
 	}
 	return nil
+}
+
+func (e *Engine) deleteSource(ctx context.Context, upload store.UploadIntent, videoID string) error {
+	if err := e.storage.DeleteObject(ctx, upload.ObjectKey); err != nil {
+		return err
+	}
+	return e.store.DeleteMediaAsset(ctx, videoID, "source")
 }
 
 func (e *Engine) uploadProcessedOutput(ctx context.Context, baseKey, hlsPrefix string, output ProcessedOutput) error {
@@ -1279,32 +1369,6 @@ func truncateError(err error) string {
 		return value[:1000]
 	}
 	return value
-}
-
-func jobPublish(job store.MediaJob) bool {
-	var payload struct {
-		Publish bool `json:"publish"`
-	}
-	if len(job.Payload) == 0 {
-		return false
-	}
-	if err := json.Unmarshal(job.Payload, &payload); err != nil {
-		return false
-	}
-	return payload.Publish
-}
-
-func jobVerdict(job store.MediaJob) string {
-	var payload struct {
-		Verdict string `json:"verdict"`
-	}
-	if len(job.Payload) == 0 {
-		return VerdictAllow
-	}
-	if err := json.Unmarshal(job.Payload, &payload); err != nil || payload.Verdict == "" {
-		return VerdictAllow
-	}
-	return payload.Verdict
 }
 
 func uploadFile(ctx context.Context, storage Storage, path, key, contentType string) error {

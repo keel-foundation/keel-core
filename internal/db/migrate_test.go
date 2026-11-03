@@ -28,7 +28,7 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 		"video_versions", "video_subtitles", "media_uploads", "media_jobs",
 		"media_scans", "media_blocklist", "media_assets",
 		"video_view_sessions", "video_view_events", "discovery_events",
-		"video_daily_analytics",
+		"video_daily_analytics", "notifications",
 	} {
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `
@@ -57,6 +57,9 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 		{"videos", "views"},
 		{"videos", "likes"},
 		{"videos", "comments_count"},
+		{"notifications", "actor_id"},
+		{"notifications", "dedupe_key"},
+		{"notifications", "read_at"},
 	} {
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `

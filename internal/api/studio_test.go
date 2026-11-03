@@ -29,8 +29,15 @@ type studioVersionPage struct {
 	Items []store.VideoVersion `json:"items"`
 }
 
+type studioVideoDetailBody struct {
+	store.Video
+	Rights    *store.VideoRights    `json:"rights"`
+	Subtitles []store.SubtitleTrack `json:"subtitles"`
+	Versions  []store.VideoVersion  `json:"versions"`
+}
+
 func TestStudioVideoCRUDAndVersions(t *testing.T) {
-	handler := newHandler(t, "")
+	handler, st := newHandlerWithStore(t, "")
 
 	rec := doJSON(t, handler, http.MethodGet, "/api/v1/studio/videos", nil, nil, "")
 	if rec.Code != http.StatusOK {
@@ -79,6 +86,29 @@ func TestStudioVideoCRUDAndVersions(t *testing.T) {
 		t.Fatalf("unexpected updated video: %+v", updated)
 	}
 
+	if err := st.UpdateVideoPolicy(context.Background(), created.ID, store.Policy{
+		PolicyVersion:     "studio-0.1",
+		RightsDeclaration: "original",
+		RightsHolder:      "Ada Lovelace",
+		RightsNotes:       "Owned footage.",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("update video policy: %v", err)
+	}
+	rec = doJSON(t, handler, http.MethodGet, "/api/v1/studio/videos/"+created.ID, nil, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get studio video detail: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	detail := decode[studioVideoDetailBody](t, rec)
+	if detail.ID != created.ID || detail.Title != "Updated draft" {
+		t.Fatalf("unexpected detail video: %+v", detail)
+	}
+	if detail.Rights == nil || detail.Rights.Declaration != "original" || detail.Rights.Holder != "Ada Lovelace" {
+		t.Fatalf("unexpected rights aggregate: %+v", detail.Rights)
+	}
+	if len(detail.Subtitles) != 0 || len(detail.Versions) != 0 {
+		t.Fatalf("unexpected empty edit aggregate: %+v", detail)
+	}
+
 	rec = doJSON(t, handler, http.MethodPost, "/api/v1/studio/videos/"+created.ID+"/versions", map[string]any{
 		"label": "First cut", "trim": map[string]any{"start": 0, "end": 8},
 		"cuts": []map[string]any{{"start": 2, "end": 3}}, "volume": 1,
@@ -97,6 +127,15 @@ func TestStudioVideoCRUDAndVersions(t *testing.T) {
 	versions := decode[studioVersionPage](t, rec)
 	if len(versions.Items) != 1 || versions.Items[0].ID != version.ID {
 		t.Fatalf("unexpected versions: %+v", versions)
+	}
+
+	rec = doJSON(t, handler, http.MethodGet, "/api/v1/studio/videos/"+created.ID, nil, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get studio video detail with version: expected 200, got %d", rec.Code)
+	}
+	detail = decode[studioVideoDetailBody](t, rec)
+	if len(detail.Versions) != 1 || detail.Versions[0].ID != version.ID {
+		t.Fatalf("detail did not include the version: %+v", detail.Versions)
 	}
 
 	rec = doJSON(t, handler, http.MethodPost, "/api/v1/studio/videos/"+created.ID+"/publish", nil, nil, "")
@@ -187,7 +226,7 @@ func newMediaHandler(t *testing.T) (http.Handler, *store.Store) {
 	t.Helper()
 	conn := testutil.Open(t)
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	handler := api.New(api.Options{

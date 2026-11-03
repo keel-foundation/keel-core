@@ -59,6 +59,15 @@ type studioChannelResponse struct {
 	Channel store.Channel `json:"channel"`
 }
 
+// studioVideoDetail is the creator edit payload. The embedded Video fields stay at the
+// top level so existing clients keep working; rights, subtitles, and versions are additive.
+type studioVideoDetail struct {
+	store.Video
+	Rights    *store.VideoRights    `json:"rights,omitempty"`
+	Subtitles []store.SubtitleTrack `json:"subtitles"`
+	Versions  []store.VideoVersion  `json:"versions"`
+}
+
 type studioVideoRequest struct {
 	Title             *string   `json:"title"`
 	Description       *string   `json:"description"`
@@ -261,7 +270,43 @@ func (s *Server) getStudioVideo(w http.ResponseWriter, r *http.Request) {
 		writeStudioError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, video)
+	subtitles, err := s.store.ListSubtitles(r.Context(), channel.ID, video.ID)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	versions, err := s.store.ListVideoVersions(r.Context(), channel.ID, video.ID)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	if subtitles == nil {
+		subtitles = []store.SubtitleTrack{}
+	}
+	if versions == nil {
+		versions = []store.VideoVersion{}
+	}
+	writeJSON(w, http.StatusOK, studioVideoDetail{
+		Video:     video,
+		Rights:    videoRights(video),
+		Subtitles: subtitles,
+		Versions:  versions,
+	})
+}
+
+func videoRights(video store.Video) *store.VideoRights {
+	if video.Policy == nil {
+		return nil
+	}
+	rights := store.VideoRights{
+		Declaration: video.Policy.RightsDeclaration,
+		Holder:      video.Policy.RightsHolder,
+		Notes:       video.Policy.RightsNotes,
+	}
+	if rights.Declaration == "" && rights.Holder == "" && rights.Notes == "" {
+		return nil
+	}
+	return &rights
 }
 
 func (s *Server) updateStudioVideo(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +362,22 @@ func (s *Server) publishStudioVideo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStudioError(w, err)
 		return
+	}
+	if s.notifications != nil {
+		notifyCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		if err := s.notifications.VideoPublished(notifyCtx, video.ID); err != nil {
+			log.Printf("notifications: publish %s: %v", video.ID, err)
+		}
+		cancel()
+	}
+	if s.discovery != nil {
+		go func(videoID string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.discovery.RefreshVideo(ctx, videoID); err != nil {
+				log.Printf("discovery: refresh published video %s: %v", videoID, err)
+			}
+		}(video.ID)
 	}
 	writeJSON(w, http.StatusOK, video)
 }

@@ -52,6 +52,12 @@ type VideoMetadataInput struct {
 	Format      string
 }
 
+type VideoRights struct {
+	Declaration string `json:"declaration,omitempty"`
+	Holder      string `json:"holder,omitempty"`
+	Notes       string `json:"notes,omitempty"`
+}
+
 type VideoTrim struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
@@ -119,6 +125,14 @@ type MediaJob struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+type MediaQueueStats struct {
+	Queued       int64      `json:"queued"`
+	Running      int64      `json:"running"`
+	Succeeded    int64      `json:"succeeded"`
+	Failed       int64      `json:"failed"`
+	OldestQueued *time.Time `json:"oldest_queued,omitempty"`
 }
 
 type MediaScan struct {
@@ -551,7 +565,7 @@ func (s *Store) MarkUploadCompleted(ctx context.Context, id, contentSHA string, 
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO media_jobs (kind, upload_id, video_id, status, max_attempts, run_after, created_at, updated_at)
-		VALUES ('scan', $1, $2, 'queued', 5, $3, $3, $3)
+		VALUES ('process', $1, $2, 'queued', 5, $3, $3, $3)
 		ON CONFLICT DO NOTHING
 	`, upload.ID, upload.VideoID, at); err != nil {
 		return UploadIntent{}, err
@@ -646,28 +660,152 @@ func scanJob(scanner rowScanner) (MediaJob, error) {
 	return job, err
 }
 
-func (s *Store) FinishMediaJob(ctx context.Context, id int64, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+func (s *Store) FinishMediaJob(ctx context.Context, id int64, workerID string, attempts int, at time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE media_jobs
-		SET status = 'succeeded', locked_at = NULL, locked_by = '', updated_at = $2
-		WHERE id = $1
-	`, id, at)
-	return err
+		SET status = 'succeeded', locked_at = NULL, locked_by = '', updated_at = $4
+		WHERE id = $1 AND locked_by = $2 AND attempts = $3 AND status = 'running'
+	`, id, workerID, attempts, at)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
-func (s *Store) RetryMediaJob(ctx context.Context, id int64, errorMessage string, retryAt, at time.Time) (string, error) {
+func (s *Store) RetryMediaJob(
+	ctx context.Context,
+	id int64,
+	workerID string,
+	attempts int,
+	errorMessage string,
+	retryAt, at time.Time,
+) (string, error) {
 	var status string
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE media_jobs
 		SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
-		    run_after = $2, locked_at = NULL, locked_by = '', last_error = $3, updated_at = $4
-		WHERE id = $1 AND status = 'running'
+		    run_after = $4, locked_at = NULL, locked_by = '', last_error = $5, updated_at = $6
+		WHERE id = $1 AND locked_by = $2 AND attempts = $3 AND status = 'running'
 		RETURNING status
-	`, id, retryAt, errorMessage, at).Scan(&status)
+	`, id, workerID, attempts, retryAt, errorMessage, at).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
 	return status, err
+}
+
+func (s *Store) RenewMediaJobLease(ctx context.Context, id int64, workerID string, at time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE media_jobs
+		SET locked_at = $3, updated_at = $3
+		WHERE id = $1 AND locked_by = $2 AND status = 'running'
+	`, id, workerID, at)
+	if err != nil {
+		return false, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return updated > 0, nil
+}
+
+func (s *Store) MediaQueueStats(ctx context.Context) (MediaQueueStats, error) {
+	var stats MediaQueueStats
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM media_jobs GROUP BY status`)
+	if err != nil {
+		return MediaQueueStats{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return MediaQueueStats{}, err
+		}
+		switch status {
+		case "queued":
+			stats.Queued = count
+		case "running":
+			stats.Running = count
+		case "succeeded":
+			stats.Succeeded = count
+		case "failed":
+			stats.Failed = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return MediaQueueStats{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return MediaQueueStats{}, err
+	}
+	var oldest sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT MIN(run_after) FROM media_jobs WHERE status = 'queued'
+	`).Scan(&oldest); err != nil {
+		return MediaQueueStats{}, err
+	}
+	if oldest.Valid {
+		value := oldest.Time
+		stats.OldestQueued = &value
+	}
+	return stats, nil
+}
+
+func (s *Store) PruneMediaJobs(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var locked bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT pg_try_advisory_xact_lock(hashtextextended('keel_media_retention', 0))`,
+	).Scan(&locked); err != nil {
+		return 0, err
+	}
+	if !locked {
+		return 0, nil
+	}
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM media_jobs
+		WHERE id IN (
+			SELECT id FROM media_jobs
+			WHERE status IN ('succeeded', 'failed') AND updated_at < $1
+			ORDER BY updated_at
+			LIMIT $2
+		)
+	`, before, limit)
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+func (s *Store) DeleteMediaAsset(ctx context.Context, videoID, kind string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM media_assets WHERE video_id = $1 AND kind = $2
+	`, videoID, kind)
+	return err
 }
 
 func (s *Store) RecordMediaScan(ctx context.Context, scan MediaScan) error {

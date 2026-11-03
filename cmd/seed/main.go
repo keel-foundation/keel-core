@@ -22,12 +22,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	pipelineURL := strings.TrimRight(
-		config.EnvOrDefault("KEELTUBE_PIPELINE_PUBLIC_URL", "http://localhost:8081"), "/",
-	)
 	webURL := strings.TrimRight(
 		config.EnvOrDefault("KEELTUBE_WEB_PUBLIC_URL", "http://localhost:3000"), "/",
 	)
+	demoMediaURL := strings.TrimSpace(os.Getenv("KEELTUBE_DEMO_MEDIA_URL"))
+	if demoMediaURL == "" {
+		demoMediaURL = webURL + "/media/ksKCMmvOxwQ.mp4"
+	}
 	demoEmail := strings.TrimSpace(os.Getenv("KEELTUBE_SEED_DEMO_EMAIL"))
 	demoPassword := os.Getenv("KEELTUBE_SEED_DEMO_PASSWORD")
 	if (demoEmail == "") != (demoPassword == "") {
@@ -47,7 +48,7 @@ func main() {
 		log.Fatalf("migrate database: %v", err)
 	}
 	st := store.New(conn)
-	if err := seed.Run(ctx, st, pipelineURL, webURL, demoEmail, demoPassword); err != nil {
+	if err := seed.Run(ctx, st, demoMediaURL, webURL, demoEmail, demoPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
 

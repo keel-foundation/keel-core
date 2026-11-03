@@ -32,7 +32,7 @@ type seedVideo struct {
 	Thumbnail   string
 }
 
-func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, demoPassword string) error {
+func Run(ctx context.Context, st *store.Store, demoMediaURL, webURL, demoEmail, demoPassword string) error {
 	actors := []store.Actor{
 		{
 			ID:          "usr_demo",
@@ -166,9 +166,9 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 			ContentHash:     contentHash(video.ID),
 			DurationSeconds: video.Duration,
 			Playback: store.Playback{
-				MP4URL:       pipelineURL + "/demo/sample.mp4",
+				MP4URL:       demoMediaURL,
 				ThumbnailURL: webURL + video.Thumbnail,
-				CaptionsURL:  webURL + "/demo/sample.vtt",
+				CaptionsURL:  webURL + "/media/mock-captions.vtt",
 			},
 			License:       "cc-by",
 			Policy:        policy,

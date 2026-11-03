@@ -14,7 +14,7 @@ func analyticsStore(t *testing.T) *store.Store {
 	t.Helper()
 	conn := testutil.Open(t)
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st

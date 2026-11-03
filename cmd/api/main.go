@@ -19,6 +19,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/mailer"
 	"github.com/keel-foundation/keel-core/internal/media"
+	"github.com/keel-foundation/keel-core/internal/notifications"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
@@ -122,6 +123,7 @@ func main() {
 
 	st := store.New(conn)
 	identityService := identity.New(st, mailerClient, identityConfig())
+	notificationService := notifications.New(st)
 	discoveryEngine := discovery.NewEngine(
 		st,
 		discovery.EmbedderFromEnv(os.Getenv),
@@ -138,8 +140,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("configure media engine: %v", err)
 		}
-		mediaEngine.OnPublish = func(ctx context.Context, videoID string) error {
-			return discoveryEngine.RefreshVideo(ctx, videoID)
+		mediaEngine.OnFailure = func(ctx context.Context, videoID, message string) error {
+			return notificationService.UploadFailed(ctx, videoID, message)
 		}
 	}
 
@@ -161,15 +163,17 @@ func main() {
 	server := &http.Server{
 		Addr: addr,
 		Handler: api.New(api.Options{
-			Store:      st,
-			Auth:       authenticator,
-			Identity:   identityService,
-			Discovery:  discoveryEngine,
-			Media:      studioMedia,
-			Origins:    allowedOrigins(),
-			RateLimit:  authRateLimit,
-			RateWindow: authRateWindow,
-			TrustProxy: trustProxy,
+			Store:         st,
+			Auth:          authenticator,
+			Identity:      identityService,
+			Discovery:     discoveryEngine,
+			Notifications: notificationService,
+			Media:         studioMedia,
+			InternalToken: strings.TrimSpace(os.Getenv("KEELTUBE_INTERNAL_TOKEN")),
+			Origins:       allowedOrigins(),
+			RateLimit:     authRateLimit,
+			RateWindow:    authRateWindow,
+			TrustProxy:    trustProxy,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -179,9 +183,8 @@ func main() {
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if mediaEngine != nil {
-		mediaEngine.Start(runCtx)
-	}
+	// Media workers run in cmd/worker. The API process only signs uploads and
+	// serves playback metadata, so scaling HTTP replicas never multiplies FFmpeg.
 	go startTelemetryRetention(runCtx, st, analyticsRetentionDays)
 
 	go func() {

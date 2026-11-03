@@ -111,10 +111,13 @@ func (s *Store) GetActor(ctx context.Context, id string) (Actor, error) {
 	return actor, nil
 }
 
-func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
+func (s *Store) GetChannel(ctx context.Context, idOrHandle string) (Channel, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+channelColumns+`, `+channelStatsColumns+` FROM channels WHERE id = $1`,
-		id,
+		`SELECT `+channelColumns+`, `+channelStatsColumns+`
+		 FROM channels
+		 WHERE id = $1 OR handle = $1 OR handle = '@' || ltrim($1, '@')
+		 LIMIT 1`,
+		idOrHandle,
 	)
 	channel, err := scanChannelWithStats(row)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -11,29 +11,34 @@ import (
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/identity"
+	"github.com/keel-foundation/keel-core/internal/notifications"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
 type Options struct {
-	Store      *store.Store
-	Auth       auth.Authenticator
-	Identity   *identity.Service
-	Discovery  *discovery.Engine
-	Media      StudioMedia
-	Origins    []string
-	RateLimit  int
-	RateWindow time.Duration
-	TrustProxy bool
+	Store         *store.Store
+	Auth          auth.Authenticator
+	Identity      *identity.Service
+	Discovery     *discovery.Engine
+	Notifications *notifications.Service
+	Media         StudioMedia
+	InternalToken string
+	Origins       []string
+	RateLimit     int
+	RateWindow    time.Duration
+	TrustProxy    bool
 }
 
 type Server struct {
-	store      *store.Store
-	auth       auth.Authenticator
-	identity   *identity.Service
-	discovery  *discovery.Engine
-	media      StudioMedia
-	limiter    *rateLimiter
-	trustProxy bool
+	store         *store.Store
+	auth          auth.Authenticator
+	identity      *identity.Service
+	discovery     *discovery.Engine
+	notifications *notifications.Service
+	media         StudioMedia
+	internalToken string
+	limiter       *rateLimiter
+	trustProxy    bool
 }
 
 func New(options Options) http.Handler {
@@ -45,13 +50,19 @@ func New(options Options) http.Handler {
 			discovery.DefaultConfig(),
 		)
 	}
+	notificationService := options.Notifications
+	if notificationService == nil && options.Store != nil {
+		notificationService = notifications.New(options.Store)
+	}
 	s := &Server{
-		store:      options.Store,
-		auth:       options.Auth,
-		identity:   options.Identity,
-		discovery:  discoveryEngine,
-		media:      options.Media,
-		trustProxy: options.TrustProxy,
+		store:         options.Store,
+		auth:          options.Auth,
+		identity:      options.Identity,
+		discovery:     discoveryEngine,
+		notifications: notificationService,
+		media:         options.Media,
+		internalToken: options.InternalToken,
+		trustProxy:    options.TrustProxy,
 	}
 	if options.RateLimit > 0 {
 		s.limiter = newRateLimiter(options.RateLimit, options.RateWindow)
@@ -81,6 +92,10 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/me/feed", s.subscriptionFeed)
 	mux.HandleFunc("GET /api/v1/me/library", s.library)
 	mux.HandleFunc("DELETE /api/v1/me/history", s.clearHistory)
+	mux.HandleFunc("GET /api/v1/me/notifications", s.listNotifications)
+	mux.HandleFunc("GET /api/v1/me/notifications/unread-count", s.unreadNotificationCount)
+	mux.HandleFunc("POST /api/v1/me/notifications/{id}/read", s.markNotificationRead)
+	mux.HandleFunc("POST /api/v1/me/notifications/read-all", s.markAllNotificationsRead)
 
 	mux.HandleFunc("GET /api/v1/videos/{id}/reaction", s.getReaction)
 	mux.HandleFunc("PUT /api/v1/videos/{id}/reaction", s.setReaction)
@@ -133,6 +148,10 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/media/{id}/hls/master.m3u8", s.mediaMaster)
 	mux.HandleFunc("GET /api/v1/media/{id}/hls/{rendition}/index.m3u8", s.mediaVariant)
 	mux.HandleFunc("GET /api/v1/media/{id}/hls/{rendition}/{segment}", s.mediaSegmentHandler)
+
+	if s.internalToken != "" {
+		mux.HandleFunc("POST /internal/v1/notifications", s.ingestNotification)
+	}
 
 	if s.identity != nil {
 		mux.HandleFunc("POST /api/v1/auth/register", s.register)

@@ -243,6 +243,22 @@ func TestCatalogChannelAndVideos(t *testing.T) {
 		t.Fatalf("unexpected channel stats: %+v", channel)
 	}
 
+	byHandle := catalogGet(t, handler, "/api/v1/channels/%40maravale", "")
+	if byHandle.Code != http.StatusOK {
+		t.Fatalf("channel by handle: expected 200, got %d", byHandle.Code)
+	}
+	handleChannel := decode[store.Channel](t, byHandle)
+	if handleChannel.ID != channel.ID {
+		t.Fatalf("unexpected channel by handle: %+v", handleChannel)
+	}
+	byBareHandle := catalogGet(t, handler, "/api/v1/channels/maravale", "")
+	if byBareHandle.Code != http.StatusOK {
+		t.Fatalf("channel by bare handle: expected 200, got %d", byBareHandle.Code)
+	}
+	if decoded := decode[store.Channel](t, byBareHandle); decoded.ID != channel.ID {
+		t.Fatalf("unexpected channel by bare handle: %+v", decoded)
+	}
+
 	videos := catalogGet(t, handler, "/api/v1/channels/ch_keel_lab/videos", "")
 	if videos.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", videos.Code)

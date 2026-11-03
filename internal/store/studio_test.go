@@ -15,7 +15,7 @@ func studioStore(t *testing.T) (*store.Store, func()) {
 	t.Helper()
 	conn := testutil.Open(t)
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:3000/media/ksKCMmvOxwQ.mp4", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st, func() { _ = conn.Close() }
@@ -173,21 +173,91 @@ func TestMediaUploadAndJobQueue(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim media job: ok=%v err=%v", ok, err)
 	}
-	if job.Kind != "scan" || job.UploadID != upload.ID || job.Attempts != 1 {
+	if job.Kind != "process" || job.UploadID != upload.ID || job.Attempts != 1 {
 		t.Fatalf("unexpected job: %+v", job)
 	}
-	if err := st.FinishMediaJob(ctx, job.ID, now.Add(3*time.Minute)); err != nil {
+	if err := st.FinishMediaJob(ctx, job.ID, job.LockedBy, job.Attempts, now.Add(3*time.Minute)); err != nil {
 		t.Fatalf("finish job: %v", err)
 	}
-	if err := st.EnqueueMediaJob(ctx, "transcode", upload.ID, upload.VideoID, nil, now.Add(4*time.Minute)); err != nil {
-		t.Fatalf("enqueue transcode: %v", err)
+	if err := st.EnqueueMediaJob(ctx, "process", upload.ID, upload.VideoID, nil, now.Add(4*time.Minute)); err != nil {
+		t.Fatalf("enqueue process: %v", err)
 	}
-	if err := st.EnqueueMediaJob(ctx, "transcode", upload.ID, upload.VideoID, nil, now.Add(4*time.Minute)); err != nil {
+	if err := st.EnqueueMediaJob(ctx, "process", upload.ID, upload.VideoID, nil, now.Add(4*time.Minute)); err != nil {
 		t.Fatalf("duplicate enqueue should be ignored: %v", err)
 	}
 	job, ok, err = st.ClaimMediaJob(ctx, "worker-2", now.Add(5*time.Minute), time.Hour)
-	if err != nil || !ok || job.Kind != "transcode" {
-		t.Fatalf("claim transcode: ok=%v job=%+v err=%v", ok, job, err)
+	if err != nil || !ok || job.Kind != "process" {
+		t.Fatalf("claim process: ok=%v job=%+v err=%v", ok, job, err)
+	}
+}
+
+func TestMediaJobFencingStatsAndRetention(t *testing.T) {
+	st, cleanup := studioStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	upload, err := st.CreateUpload(ctx, store.Video{
+		ID: "vid_job_fencing", ChannelID: "ch_demo", Title: "Job fencing",
+		Status: "processing", Visibility: "private", Playback: store.Playback{},
+		License: "standard", Format: "video", Category: "Documentaries",
+		Tags: []string{}, CreatedAt: now, UpdatedAt: now,
+	}, store.UploadIntent{
+		ChannelID: "ch_demo", ActorID: "usr_demo", S3UploadID: "s3-upload",
+		Bucket: "bucket", ObjectKey: "media/ch_demo/vid_job_fencing/source.mp4",
+		Filename: "source.mp4", ContentType: "video/mp4", SizeBytes: 10,
+		PartSize: 5, Status: "pending", ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	if _, err := st.MarkUploadCompleted(ctx, upload.ID, "", now.Add(time.Minute)); err != nil {
+		t.Fatalf("mark completed: %v", err)
+	}
+	job, ok, err := st.ClaimMediaJob(ctx, "worker-1", now.Add(2*time.Minute), 30*time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+
+	if ok, err := st.RenewMediaJobLease(ctx, job.ID, "worker-2", now.Add(3*time.Minute)); err != nil || ok {
+		t.Fatalf("wrong-worker renew: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.RenewMediaJobLease(ctx, job.ID, "worker-1", now.Add(3*time.Minute)); err != nil || !ok {
+		t.Fatalf("renew: ok=%v err=%v", ok, err)
+	}
+	if status, err := st.RetryMediaJob(ctx, job.ID, "worker-2", job.Attempts, "wrong", now, now); !errors.Is(err, store.ErrNotFound) || status != "" {
+		t.Fatalf("wrong-worker retry: status=%q err=%v", status, err)
+	}
+	if status, err := st.RetryMediaJob(ctx, job.ID, "worker-1", job.Attempts, "retry", now.Add(4*time.Minute), now.Add(4*time.Minute)); err != nil || status != "queued" {
+		t.Fatalf("retry: status=%q err=%v", status, err)
+	}
+
+	job, ok, err = st.ClaimMediaJob(ctx, "worker-2", now.Add(5*time.Minute), 30*time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("reclaim: ok=%v err=%v", ok, err)
+	}
+	if err := st.FinishMediaJob(ctx, job.ID, "worker-1", job.Attempts, now.Add(6*time.Minute)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("wrong-worker finish: expected ErrNotFound, got %v", err)
+	}
+	if err := st.FinishMediaJob(ctx, job.ID, job.LockedBy, job.Attempts, now.Add(6*time.Minute)); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	stats, err := st.MediaQueueStats(ctx)
+	if err != nil {
+		t.Fatalf("queue stats: %v", err)
+	}
+	if stats.Queued != 0 || stats.Running != 0 || stats.Succeeded != 1 || stats.Failed != 0 {
+		t.Fatalf("unexpected queue stats: %+v", stats)
+	}
+
+	pruned, err := st.PruneMediaJobs(ctx, now.Add(7*time.Minute), 1000)
+	if err != nil {
+		t.Fatalf("prune jobs: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("expected one pruned job, got %d", pruned)
 	}
 }
 
