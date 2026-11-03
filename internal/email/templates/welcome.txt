@@ -1,0 +1,19 @@
+KeelTube
+
+Welcome
+
+{{if .Name}}Hello {{.Name}},{{else}}Hello,{{end}}
+
+Your email is verified. Your KeelTube account and channel are ready.
+
+Sign in to finish your profile, upload your first video, and review your creator record.
+
+Open KeelTube:
+{{.ActionURL}}
+
+{{.FooterNote}}
+
+--
+KeelTube
+Creator-owned video with an even keel.
+This is a transactional message about your account.

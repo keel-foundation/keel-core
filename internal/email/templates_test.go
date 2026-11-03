@@ -89,6 +89,36 @@ func TestPasswordResetRendersActionLink(t *testing.T) {
 	}
 }
 
+func TestWelcomeRenders(t *testing.T) {
+	message, err := email.Welcome(email.Data{
+		Name:      "Mara Vale",
+		Email:     "mara@keeltube.com",
+		ActionURL: "https://keeltube.com/",
+		AppURL:    "https://keeltube.com",
+	})
+	if err != nil {
+		t.Fatalf("render welcome: %v", err)
+	}
+	if message.Subject != "Welcome to KeelTube" {
+		t.Fatalf("unexpected subject: %s", message.Subject)
+	}
+	for _, want := range []string{
+		"Your account is ready",
+		"Open KeelTube",
+		"https://keeltube.com/",
+		"@media (prefers-color-scheme: dark)",
+		"email-logo-light",
+		"email-logo-dark",
+	} {
+		if !strings.Contains(message.HTML, want) {
+			t.Fatalf("html missing %q", want)
+		}
+	}
+	if !strings.Contains(message.Text, "Your email is verified") || !strings.Contains(message.Text, "https://keeltube.com/") {
+		t.Fatalf("unexpected text body: %s", message.Text)
+	}
+}
+
 func TestTemplatesEscapeUserControlledValues(t *testing.T) {
 	message, err := email.Verification(email.Data{
 		Name:      `<script>alert(1)</script>`,

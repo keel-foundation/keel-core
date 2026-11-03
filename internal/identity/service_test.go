@@ -178,6 +178,29 @@ func TestVerifyEmailRejectsExpiredCode(t *testing.T) {
 	}
 }
 
+func TestVerifyEmailSendsWelcome(t *testing.T) {
+	service, _, messages := newTestService(t, testConfig())
+	result, _ := registerUser(t, service)
+	if messages.count() != 1 {
+		t.Fatalf("expected one verification email, got %d", messages.count())
+	}
+
+	verifyUser(t, service, result)
+	if messages.count() != 2 {
+		t.Fatalf("expected a welcome email after verification, got %d messages", messages.count())
+	}
+	welcome := messages.last(t)
+	if welcome.Subject != "Welcome to KeelTube" {
+		t.Fatalf("unexpected welcome subject: %s", welcome.Subject)
+	}
+	if welcome.To != result.Email {
+		t.Fatalf("unexpected welcome recipient: %s", welcome.To)
+	}
+	if !strings.Contains(welcome.Text, "Your email is verified") {
+		t.Fatalf("unexpected welcome body: %s", welcome.Text)
+	}
+}
+
 func TestSessionExpires(t *testing.T) {
 	cfg := testConfig()
 	service, _, _ := newTestService(t, cfg)

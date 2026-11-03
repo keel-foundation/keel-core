@@ -74,6 +74,16 @@ func PasswordReset(data Data) (Message, error) {
 	})
 }
 
+func Welcome(data Data) (Message, error) {
+	return render("welcome", view{
+		Data:       data,
+		Preheader:  "Your email is verified and your account is ready.",
+		Eyebrow:    "Welcome",
+		Heading:    "Your account is ready",
+		FooterNote: "You are receiving this because you verified a KeelTube account.",
+	})
+}
+
 func render(name string, value view) (Message, error) {
 	value.Subject = subject(name)
 	value.LogoURL = logoSrc(value.Data.LogoURL, logoLightPNG)
@@ -120,6 +130,8 @@ func subject(name string) string {
 		return "Your KeelTube verification code"
 	case "password_reset":
 		return "Reset your KeelTube password"
+	case "welcome":
+		return "Welcome to KeelTube"
 	default:
 		return "KeelTube"
 	}

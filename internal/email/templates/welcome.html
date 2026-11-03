@@ -1,0 +1,28 @@
+{{define "content"}}
+<tr>
+  <td style="padding-bottom: 22px;">
+    <p class="email-text">{{if .Name}}Hello {{.Name}},{{else}}Hello,{{end}}</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 22px;">
+    <p class="email-text">Your email is verified. Your KeelTube account and channel are ready.</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 22px;">
+    <p class="email-text">Sign in to finish your profile, upload your first video, and review your creator record.</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 22px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="email-button-cell" bgcolor="#9C599C" style="background-color:#9C599C; border-radius:4px;">
+          <a href="{{.ActionURL}}" class="email-button" style="color:#FFFFFF; text-decoration:none;">Open KeelTube</a>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+{{end}}

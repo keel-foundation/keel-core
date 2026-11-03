@@ -313,6 +313,7 @@ func (s *Service) VerifyEmail(ctx context.Context, input VerifyEmailInput, meta 
 		return SessionResult{}, err
 	}
 	s.record(ctx, account.ID, "auth.email_verified", meta, now, nil)
+	s.sendWelcome(ctx, email, actor.DisplayName)
 	return session, nil
 }
 
@@ -747,6 +748,29 @@ func (s *Service) sendVerification(ctx context.Context, to, name, code string, e
 		HTML:    rendered.HTML,
 	}); err != nil {
 		log.Printf("identity: send verification to %s: %v", to, err)
+	}
+}
+
+func (s *Service) sendWelcome(ctx context.Context, to, name string) {
+	rendered, err := email.Welcome(email.Data{
+		Name:        name,
+		Email:       to,
+		ActionURL:   strings.TrimRight(s.cfg.AppURL, "/") + "/",
+		AppURL:      s.cfg.AppURL,
+		LogoURL:     s.cfg.EmailLogoURL,
+		LogoDarkURL: s.cfg.EmailLogoDarkURL,
+	})
+	if err != nil {
+		log.Printf("identity: render welcome for %s: %v", to, err)
+		return
+	}
+	if err := s.mailer.Send(ctx, mailer.Message{
+		To:      to,
+		Subject: rendered.Subject,
+		Text:    rendered.Text,
+		HTML:    rendered.HTML,
+	}); err != nil {
+		log.Printf("identity: send welcome to %s: %v", to, err)
 	}
 }
 
