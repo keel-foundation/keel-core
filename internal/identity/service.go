@@ -755,7 +755,7 @@ func (s *Service) sendWelcome(ctx context.Context, to, name string) {
 	rendered, err := email.Welcome(email.Data{
 		Name:        name,
 		Email:       to,
-		ActionURL:   strings.TrimRight(s.cfg.AppURL, "/") + "/",
+		ActionURL:   strings.TrimRight(s.cfg.AppURL, "/") + "/studio",
 		AppURL:      s.cfg.AppURL,
 		LogoURL:     s.cfg.EmailLogoURL,
 		LogoDarkURL: s.cfg.EmailLogoDarkURL,

@@ -1,17 +1,105 @@
 {{define "content"}}
 <tr>
-  <td style="padding-bottom: 22px;">
+  <td style="padding-bottom: 20px;">
     <p class="email-text">{{if .Name}}Hello {{.Name}},{{else}}Hello,{{end}}</p>
   </td>
 </tr>
 <tr>
-  <td style="padding-bottom: 22px;">
+  <td style="padding-bottom: 16px;">
     <p class="email-text">Your email is verified. Your KeelTube account and channel are ready.</p>
   </td>
 </tr>
 <tr>
-  <td style="padding-bottom: 22px;">
-    <p class="email-text">Sign in to finish your profile, upload your first video, and review your creator record.</p>
+  <td style="padding-bottom: 24px;">
+    <p class="email-text">KeelTube is creator-owned video with an even keel. It is built around a simple idea: a platform should be able to explain what it did, who decided, and how to appeal it.</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 26px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-panel" style="background-color:#FAF5FA;">
+      <tr>
+        <td style="padding: 20px 22px;">
+          <p class="email-panel-label" style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size:11px; line-height:16px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#693A69; margin:0 0 8px 0;">An even keel</p>
+          <p class="email-text" style="font-size:15px; line-height:24px;">Stability, due process, and a portable exit belong in the product, not in a support article.</p>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 12px;">
+    <p class="email-muted" style="font-size:11px; line-height:16px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#6E676E; margin:0;">Built for creators</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 18px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td width="38" valign="top" class="email-number" style="width:38px; font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:13px; line-height:24px; font-weight:500; color:#9C599C;">01</td>
+        <td valign="top">
+          <p class="email-item-title">Your channel, your archive</p>
+          <p class="email-text" style="font-size:14px; line-height:22px; padding-top:4px;">Set up your channel in Creator Studio and keep your work and metadata together.</p>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 18px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td width="38" valign="top" class="email-number" style="width:38px; font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:13px; line-height:24px; font-weight:500; color:#9C599C;">02</td>
+        <td valign="top">
+          <p class="email-item-title">A record you can inspect</p>
+          <p class="email-text" style="font-size:14px; line-height:22px; padding-top:4px;">Every enforcement action carries the policy clause, evidence, reviewer, deadline, and an audit hash.</p>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 26px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td width="38" valign="top" class="email-number" style="width:38px; font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:13px; line-height:24px; font-weight:500; color:#9C599C;">03</td>
+        <td valign="top">
+          <p class="email-item-title">A real appeal route</p>
+          <p class="email-text" style="font-size:14px; line-height:22px; padding-top:4px;">File an appeal with grounds and evidence. An independent reviewer decides, and the outcome is recorded.</p>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 12px;">
+    <p class="email-muted" style="font-size:11px; line-height:16px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#6E676E; margin:0;">What is different</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 18px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td width="14" valign="top" class="email-bullet" style="width:14px; color:#9C599C; font-size:16px; line-height:22px;">&bull;</td>
+        <td class="email-text" style="font-size:14px; line-height:22px; padding-bottom:8px;">Specific notice, not a generic violation message.</td>
+      </tr>
+      <tr>
+        <td width="14" valign="top" class="email-bullet" style="width:14px; color:#9C599C; font-size:16px; line-height:22px;">&bull;</td>
+        <td class="email-text" style="font-size:14px; line-height:22px; padding-bottom:8px;">Human review before irreversible harm.</td>
+      </tr>
+      <tr>
+        <td width="14" valign="top" class="email-bullet" style="width:14px; color:#9C599C; font-size:16px; line-height:22px;">&bull;</td>
+        <td class="email-text" style="font-size:14px; line-height:22px; padding-bottom:8px;">A hash-chained audit ledger, not a black box.</td>
+      </tr>
+      <tr>
+        <td width="14" valign="top" class="email-bullet" style="width:14px; color:#9C599C; font-size:16px; line-height:22px;">&bull;</td>
+        <td class="email-text" style="font-size:14px; line-height:22px;">Portability is a requirement, not a support ticket.</td>
+      </tr>
+    </table>
+  </td>
+</tr>
+<tr>
+  <td style="padding-bottom: 24px;">
+    <p class="email-text" style="font-size:14px; line-height:22px;">Most platforms treat moderation as a black box. KeelTube treats it as a record. Federation, transparent payouts, and content protection are next.</p>
   </td>
 </tr>
 <tr>
@@ -19,7 +107,7 @@
     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
       <tr>
         <td class="email-button-cell" bgcolor="#9C599C" style="background-color:#9C599C; border-radius:4px;">
-          <a href="{{.ActionURL}}" class="email-button" style="color:#FFFFFF; text-decoration:none;">Open KeelTube</a>
+          <a href="{{.ActionURL}}" class="email-button" style="color:#FFFFFF; text-decoration:none;">Open Creator Studio</a>
         </td>
       </tr>
     </table>

@@ -77,9 +77,9 @@ func PasswordReset(data Data) (Message, error) {
 func Welcome(data Data) (Message, error) {
 	return render("welcome", view{
 		Data:       data,
-		Preheader:  "Your email is verified and your account is ready.",
+		Preheader:  "Your email is verified. Your account and channel are ready.",
 		Eyebrow:    "Welcome",
-		Heading:    "Your account is ready",
+		Heading:    "Welcome to KeelTube",
 		FooterNote: "You are receiving this because you verified a KeelTube account.",
 	})
 }

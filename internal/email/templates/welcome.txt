@@ -6,9 +6,32 @@ Welcome
 
 Your email is verified. Your KeelTube account and channel are ready.
 
-Sign in to finish your profile, upload your first video, and review your creator record.
+KeelTube is creator-owned video with an even keel. It is built around a simple idea: a platform should be able to explain what it did, who decided, and how to appeal it.
 
-Open KeelTube:
+AN EVEN KEEL
+Stability, due process, and a portable exit belong in the product, not in a support article.
+
+BUILT FOR CREATORS
+
+01  Your channel, your archive
+    Set up your channel in Creator Studio and keep your work and metadata together.
+
+02  A record you can inspect
+    Every enforcement action carries the policy clause, evidence, reviewer, deadline, and an audit hash.
+
+03  A real appeal route
+    File an appeal with grounds and evidence. An independent reviewer decides, and the outcome is recorded.
+
+WHAT IS DIFFERENT
+
+- Specific notice, not a generic violation message.
+- Human review before irreversible harm.
+- A hash-chained audit ledger, not a black box.
+- Portability is a requirement, not a support ticket.
+
+Most platforms treat moderation as a black box. KeelTube treats it as a record. Federation, transparent payouts, and content protection are next.
+
+Open Creator Studio:
 {{.ActionURL}}
 
 {{.FooterNote}}

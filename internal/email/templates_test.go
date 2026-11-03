@@ -93,7 +93,7 @@ func TestWelcomeRenders(t *testing.T) {
 	message, err := email.Welcome(email.Data{
 		Name:      "Mara Vale",
 		Email:     "mara@keeltube.com",
-		ActionURL: "https://keeltube.com/",
+		ActionURL: "https://keeltube.com/studio",
 		AppURL:    "https://keeltube.com",
 	})
 	if err != nil {
@@ -103,9 +103,15 @@ func TestWelcomeRenders(t *testing.T) {
 		t.Fatalf("unexpected subject: %s", message.Subject)
 	}
 	for _, want := range []string{
-		"Your account is ready",
-		"Open KeelTube",
-		"https://keeltube.com/",
+		"Welcome to KeelTube",
+		"An even keel",
+		"Built for creators",
+		"What is different",
+		"Open Creator Studio",
+		"https://keeltube.com/studio",
+		"Most platforms treat moderation as a black box",
+		"email-panel",
+		"email-number",
 		"@media (prefers-color-scheme: dark)",
 		"email-logo-light",
 		"email-logo-dark",
@@ -114,7 +120,9 @@ func TestWelcomeRenders(t *testing.T) {
 			t.Fatalf("html missing %q", want)
 		}
 	}
-	if !strings.Contains(message.Text, "Your email is verified") || !strings.Contains(message.Text, "https://keeltube.com/") {
+	if !strings.Contains(message.Text, "Your email is verified") ||
+		!strings.Contains(message.Text, "Most platforms treat moderation as a black box") ||
+		!strings.Contains(message.Text, "https://keeltube.com/studio") {
 		t.Fatalf("unexpected text body: %s", message.Text)
 	}
 }
