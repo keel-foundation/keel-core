@@ -90,7 +90,9 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("PUT /api/v1/videos/{id}/save", s.saveVideo)
 	mux.HandleFunc("DELETE /api/v1/videos/{id}/save", s.unsaveVideo)
 
-	mux.HandleFunc("POST /api/v1/videos/{id}/view", s.recordView)
+	mux.HandleFunc("POST /api/v1/videos/{id}/view", s.startView)
+	mux.HandleFunc("POST /api/v1/videos/{id}/view/progress", s.progressView)
+	mux.HandleFunc("POST /api/v1/telemetry/events", s.recordTelemetryEvents)
 
 	mux.HandleFunc("GET /api/v1/videos/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/v1/videos/{id}/comments", s.createComment)
@@ -114,6 +116,9 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/studio/videos/{id}/subtitles/{track_id}/complete", s.completeStudioSubtitle)
 	mux.HandleFunc("DELETE /api/v1/studio/videos/{id}/subtitles/{track_id}", s.deleteStudioSubtitle)
 	mux.HandleFunc("GET /api/v1/studio/stats", s.studioStats)
+	mux.HandleFunc("GET /api/v1/studio/analytics/summary", s.studioAnalyticsSummary)
+	mux.HandleFunc("GET /api/v1/studio/analytics/timeseries", s.studioAnalyticsTimeseries)
+	mux.HandleFunc("GET /api/v1/studio/videos/{id}/analytics", s.studioVideoAnalytics)
 	mux.HandleFunc("POST /api/v1/studio/uploads", s.createStudioUpload)
 	mux.HandleFunc("GET /api/v1/studio/uploads/{id}", s.getStudioUpload)
 	mux.HandleFunc("GET /api/v1/studio/uploads/{id}/scans", s.listStudioUploadScans)

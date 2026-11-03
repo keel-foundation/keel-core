@@ -365,40 +365,6 @@ func (s *Store) IsSaved(ctx context.Context, actorID, videoID string) (bool, err
 	return saved, err
 }
 
-func (s *Store) RecordView(ctx context.Context, actorID, videoID string, at time.Time) (int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO watch_history (actor_id, video_id, watched_at)
-		SELECT $1, id, $3 FROM videos WHERE id = $2
-		ON CONFLICT (actor_id, video_id) DO UPDATE SET watched_at = EXCLUDED.watched_at
-	`, actorID, videoID, at); err != nil {
-		return 0, err
-	}
-
-	var views int64
-	err = tx.QueryRowContext(ctx, `
-		UPDATE videos SET views = views + 1
-		WHERE id = $1
-		RETURNING views
-	`, videoID).Scan(&views)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrNotFound
-	}
-	if err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return views, nil
-}
-
 func (s *Store) ClearHistory(ctx context.Context, actorID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM watch_history WHERE actor_id = $1`, actorID)
 	return err

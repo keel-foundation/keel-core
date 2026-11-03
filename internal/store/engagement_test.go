@@ -227,12 +227,14 @@ func TestEngagementLibrary(t *testing.T) {
 		t.Fatalf("unexpected liked library: total=%d %+v", total, liked)
 	}
 
-	views, err := st.RecordView(ctx, "usr_demo", video.ID, now)
+	actorID := "usr_demo"
+	viewer := store.Viewer{Key: "actor:" + actorID, ActorID: &actorID}
+	view, err := st.StartView(ctx, viewer, video.ID, "watch", now)
 	if err != nil {
 		t.Fatalf("record view: %v", err)
 	}
-	if views != video.Views+1 {
-		t.Fatalf("unexpected view count: %d", views)
+	if view.Views != video.Views+1 || !view.Session.Counted {
+		t.Fatalf("unexpected view result: %+v", view)
 	}
 	history, total, err := st.ListLibrary(ctx, "usr_demo", "history", 20, 0)
 	if err != nil {
@@ -242,12 +244,12 @@ func TestEngagementLibrary(t *testing.T) {
 		t.Fatalf("unexpected history library: total=%d %+v", total, history)
 	}
 
-	views, err = st.RecordView(ctx, "usr_demo", video.ID, now)
+	repeat, err := st.StartView(ctx, viewer, video.ID, "watch", now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("repeat view: %v", err)
 	}
-	if views != video.Views+2 {
-		t.Fatalf("unexpected repeat view count: %d", views)
+	if repeat.Views != video.Views+1 || repeat.Session.Counted {
+		t.Fatalf("expected deduplicated repeat view, got %+v", repeat)
 	}
 	_, total, err = st.ListLibrary(ctx, "usr_demo", "history", 20, 0)
 	if err != nil {

@@ -6,8 +6,8 @@ moderation-facing domain model.
 **Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
 in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
 public catalog and discovery endpoints, viewer engagement (subscriptions, reactions, saves, watch
-history, comments, and replies), and the creator studio/media engine are implemented. Social
-providers and full OIDC are not implemented yet.
+history, comments, and replies), the creator studio/media engine, and watch telemetry/creator
+analytics are implemented. Social providers and full OIDC are not implemented yet.
 
 ## Configuration
 
@@ -66,6 +66,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_SCANNER_URL` | unset | Optional external copyright/policy scanner |
 | `KEELTUBE_MEDIA_SCANNER_TOKEN` | unset | Bearer token for the external scanner |
 | `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
+| `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -184,8 +185,41 @@ remain available to anonymous viewers.
 | `POST` | `/api/v1/comments/{id}/like` | Like a comment |
 | `DELETE` | `/api/v1/comments/{id}/like` | Remove a comment like |
 
-`POST /api/v1/videos/{id}/view` records watch history and increments the public view counter for
-each authenticated request. Time-window view deduplication is future work.
+`POST /api/v1/videos/{id}/view` records watch history and starts a telemetry session. The public
+view counter increments only for the first session per viewer and video within 30 minutes; repeat
+sessions still contribute watch-time analytics.
+
+## Watch telemetry and creator analytics
+
+Playback telemetry is stored separately from the public view counter and creator analytics
+aggregates.
+
+- Signed-in viewers are identified by actor ID. Anonymous viewers receive an opaque, HttpOnly
+  visitor cookie. Raw IP addresses and user agents are never stored for telemetry.
+- Starting a playback session deduplicates the public view count per viewer and video for 30
+  minutes. Repeat sessions are still recorded for watch-time analytics but do not increment views.
+- Players send idempotent progress heartbeats with a server-issued session ID and a client event ID.
+  Core computes capped watch-time deltas, ignores large seeks, and records completion once.
+- Discovery telemetry accepts batched impression and click events with client event IDs for
+  idempotency.
+- Daily aggregates track sessions, counted views, watch seconds, completions, impressions, and
+  clicks. Completion rate uses completed sessions over total sessions.
+- Raw view sessions/events and discovery events are pruned after
+  `KEELTUBE_ANALYTICS_RETENTION_DAYS` (default 90). Daily aggregates are permanent.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/videos/{id}/view` | Start a playback session and optionally count a view |
+| `POST` | `/api/v1/videos/{id}/view/progress` | Send an idempotent playback heartbeat |
+| `POST` | `/api/v1/telemetry/events` | Record batched impression and click events |
+| `GET` | `/api/v1/studio/analytics/summary` | Creator summary for a date range |
+| `GET` | `/api/v1/studio/analytics/timeseries` | Daily creator analytics points |
+| `GET` | `/api/v1/studio/videos/{id}/analytics` | Per-video summary and daily points |
+
+Analytics range parameters are `from` and `to` in `YYYY-MM-DD` form. The default range is the last
+28 UTC days; the maximum range is 366 days. Creator analytics require the studio owner session.
 
 ## Creator Studio and media engine
 

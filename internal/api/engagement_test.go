@@ -440,7 +440,6 @@ func TestEngagementRequiresAuth(t *testing.T) {
 		{http.MethodGet, "/api/v1/videos/aB3dEf9hJkL/save", nil},
 		{http.MethodPut, "/api/v1/videos/aB3dEf9hJkL/save", nil},
 		{http.MethodDelete, "/api/v1/videos/aB3dEf9hJkL/save", nil},
-		{http.MethodPost, "/api/v1/videos/aB3dEf9hJkL/view", nil},
 		{http.MethodPost, "/api/v1/videos/ksKCMmvOxwQ/comments", map[string]string{"body": "hello"}},
 		{http.MethodPost, "/api/v1/comments/cmt_missing/like", nil},
 		{http.MethodDelete, "/api/v1/comments/cmt_missing/like", nil},
@@ -467,6 +466,10 @@ func TestEngagementCSRF(t *testing.T) {
 	csrfCookie := findCookie(cookies, "keeltube_csrf")
 	if csrfCookie == nil {
 		t.Fatal("expected a CSRF cookie")
+	}
+	rec = doJSON(t, handler, http.MethodPost, "/api/v1/videos/aB3dEf9hJkL/view", nil, cookies, "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("view without CSRF: expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 	rec = doJSON(t, handler, http.MethodPut, "/api/v1/videos/aB3dEf9hJkL/reaction", map[string]string{
 		"kind": "like",

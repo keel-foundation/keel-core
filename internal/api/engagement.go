@@ -44,11 +44,6 @@ type saveResponse struct {
 	Saved   bool   `json:"saved"`
 }
 
-type viewResponse struct {
-	VideoID string `json:"video_id"`
-	Views   int64  `json:"views"`
-}
-
 type commentRequest struct {
 	Body     string `json:"body"`
 	ParentID string `json:"parent_id,omitempty"`
@@ -398,24 +393,6 @@ func (s *Server) getSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, saveResponse{VideoID: video.ID, Saved: saved})
-}
-
-func (s *Server) recordView(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requirePrincipal(w, r)
-	if !ok {
-		return
-	}
-	video, ok := s.engagementVideo(w, r)
-	if !ok {
-		return
-	}
-	views, err := s.store.RecordView(r.Context(), principal.ID, video.ID, time.Now().UTC())
-	if err != nil {
-		s.writeEngagementError(w, err)
-		return
-	}
-	s.invalidateDiscovery(principal.ID)
-	writeJSON(w, http.StatusOK, viewResponse{VideoID: video.ID, Views: views})
 }
 
 func (s *Server) clearHistory(w http.ResponseWriter, r *http.Request) {

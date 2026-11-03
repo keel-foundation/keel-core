@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,38 @@ func identityConfig() identity.Config {
 	return cfg
 }
 
+func startTelemetryRetention(ctx context.Context, st *store.Store, days int) {
+	if days <= 0 {
+		return
+	}
+	prune := func() {
+		pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := st.PruneTelemetry(pruneCtx, time.Now().UTC().AddDate(0, 0, -days))
+		if err != nil {
+			log.Printf("analytics retention: %v", err)
+			return
+		}
+		if result.Sessions > 0 || result.ViewEvents > 0 || result.Discovery > 0 {
+			log.Printf(
+				"analytics retention: sessions=%d view_events=%d discovery_events=%d",
+				result.Sessions, result.ViewEvents, result.Discovery,
+			)
+		}
+	}
+	prune()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
+}
+
 func main() {
 	if err := config.LoadDotEnv(".env"); err != nil {
 		log.Fatalf("load .env: %v", err)
@@ -59,6 +92,14 @@ func main() {
 	dsn, err := config.RequireEnv("KEELTUBE_DATABASE_URL")
 	if err != nil {
 		log.Fatal(err)
+	}
+	analyticsRetentionDays := 90
+	if raw := strings.TrimSpace(os.Getenv("KEELTUBE_ANALYTICS_RETENTION_DAYS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 {
+			log.Fatalf("KEELTUBE_ANALYTICS_RETENTION_DAYS must be a positive integer")
+		}
+		analyticsRetentionDays = value
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -141,6 +182,7 @@ func main() {
 	if mediaEngine != nil {
 		mediaEngine.Start(runCtx)
 	}
+	go startTelemetryRetention(runCtx, st, analyticsRetentionDays)
 
 	go func() {
 		<-runCtx.Done()

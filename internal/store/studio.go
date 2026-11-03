@@ -158,15 +158,24 @@ type SubtitleTrack struct {
 }
 
 type StudioStats struct {
-	VideoCount      int64   `json:"video_count"`
-	PublishedCount  int64   `json:"published_count"`
-	ProcessingCount int64   `json:"processing_count"`
-	BlockedUploads  int64   `json:"blocked_uploads"`
-	Views           int64   `json:"views"`
-	Likes           int64   `json:"likes"`
-	Comments        int64   `json:"comments"`
-	Subscribers     int64   `json:"subscribers"`
-	Recent          []Video `json:"recent"`
+	VideoCount        int64   `json:"video_count"`
+	PublishedCount    int64   `json:"published_count"`
+	ProcessingCount   int64   `json:"processing_count"`
+	BlockedUploads    int64   `json:"blocked_uploads"`
+	Views             int64   `json:"views"`
+	Likes             int64   `json:"likes"`
+	Comments          int64   `json:"comments"`
+	Subscribers       int64   `json:"subscribers"`
+	AnalyticsViews    int64   `json:"analytics_views"`
+	AnalyticsSessions int64   `json:"analytics_sessions"`
+	WatchSeconds      float64 `json:"watch_seconds"`
+	WatchHours        float64 `json:"watch_hours"`
+	Completions       int64   `json:"completions"`
+	CompletionRate    float64 `json:"completion_rate"`
+	Impressions       int64   `json:"impressions"`
+	Clicks            int64   `json:"clicks"`
+	ClickThroughRate  float64 `json:"click_through_rate"`
+	Recent            []Video `json:"recent"`
 }
 
 type queryRower interface {
@@ -1105,6 +1114,25 @@ func (s *Store) StudioStats(ctx context.Context, channelID string) (StudioStats,
 		WHERE channel_id = $1 AND status = 'blocked'
 	`, channelID).Scan(&stats.BlockedUploads); err != nil {
 		return StudioStats{}, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(views), 0), COALESCE(SUM(sessions), 0),
+		       COALESCE(SUM(watch_seconds), 0), COALESCE(SUM(completions), 0),
+		       COALESCE(SUM(impressions), 0), COALESCE(SUM(clicks), 0)
+		FROM video_daily_analytics
+		WHERE channel_id = $1
+	`, channelID).Scan(
+		&stats.AnalyticsViews, &stats.AnalyticsSessions, &stats.WatchSeconds,
+		&stats.Completions, &stats.Impressions, &stats.Clicks,
+	); err != nil {
+		return StudioStats{}, err
+	}
+	stats.WatchHours = stats.WatchSeconds / 3600
+	if stats.AnalyticsSessions > 0 {
+		stats.CompletionRate = float64(stats.Completions) / float64(stats.AnalyticsSessions)
+	}
+	if stats.Impressions > 0 {
+		stats.ClickThroughRate = float64(stats.Clicks) / float64(stats.Impressions)
 	}
 	recent, _, err := s.ListStudioVideos(ctx, channelID, StudioVideoFilter{Limit: 5})
 	if err != nil {

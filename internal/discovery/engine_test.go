@@ -11,6 +11,10 @@ import (
 	"github.com/keel-foundation/keel-core/internal/testutil"
 )
 
+func actorViewer(actorID string) store.Viewer {
+	return store.Viewer{Key: "actor:" + actorID, ActorID: &actorID}
+}
+
 func newDiscoveryStore(t *testing.T) *store.Store {
 	t.Helper()
 	conn := testutil.Open(t)
@@ -70,7 +74,7 @@ func TestFeedPersonalized(t *testing.T) {
 	if _, err := st.SaveVideo(ctx, "usr_demo", "vid_even_keel", now); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if _, err := st.RecordView(ctx, "usr_demo", "vid_even_keel", now); err != nil {
+	if _, err := st.StartView(ctx, actorViewer("usr_demo"), "vid_even_keel", "watch", now); err != nil {
 		t.Fatalf("view: %v", err)
 	}
 	if _, err := st.SetReaction(ctx, "usr_demo", "vid_demo_001", "dislike", now); err != nil {
@@ -130,7 +134,7 @@ func TestExplorePersonalized(t *testing.T) {
 	if _, err := st.SetReaction(ctx, "usr_demo", "vid_even_keel", "like", now.Add(-time.Hour)); err != nil {
 		t.Fatalf("like: %v", err)
 	}
-	if _, err := st.RecordView(ctx, "usr_demo", "vid_even_keel", now); err != nil {
+	if _, err := st.StartView(ctx, actorViewer("usr_demo"), "vid_even_keel", "watch", now); err != nil {
 		t.Fatalf("view: %v", err)
 	}
 	if err := engine.RefreshAllVideos(ctx); err != nil {
@@ -175,7 +179,7 @@ func TestInvalidateActor(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	if _, err := st.RecordView(ctx, "usr_demo", "vid_even_keel", now); err != nil {
+	if _, err := st.StartView(ctx, actorViewer("usr_demo"), "vid_even_keel", "watch", now); err != nil {
 		t.Fatalf("view: %v", err)
 	}
 	if err := engine.RefreshAllVideos(ctx); err != nil {
