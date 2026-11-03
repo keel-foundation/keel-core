@@ -48,6 +48,9 @@ func TestSeedAndReadBack(t *testing.T) {
 	if video.Title != "The Last Lighthouse" || video.Status != "published" {
 		t.Fatalf("unexpected video: %+v", video)
 	}
+	if video.PublicID != "ksKCMmvOxwQ" {
+		t.Fatalf("unexpected public video id: %+v", video)
+	}
 	if video.Format != "video" || video.Category != "Documentaries" {
 		t.Fatalf("unexpected video catalog fields: %+v", video)
 	}

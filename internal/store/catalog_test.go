@@ -99,6 +99,19 @@ func TestCatalogVideoFilters(t *testing.T) {
 		t.Fatalf("expected 4 channel videos, got total=%d len=%d", total, len(channelVideos))
 	}
 
+	demoVideos, total, err := st.ListVideos(ctx, store.VideoFilter{
+		ChannelID:  "ch_demo",
+		PublicOnly: true,
+		Sort:       "latest",
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("list demo channel videos: %v", err)
+	}
+	if total != 1 || len(demoVideos) != 1 || demoVideos[0].ID != "vid_demo_001" {
+		t.Fatalf("expected only the public demo video, got total=%d %+v", total, demoVideos)
+	}
+
 	multiCategory, total, err := st.ListVideos(ctx, store.VideoFilter{
 		PublicOnly: true,
 		Categories: []string{"Protocol", "Moderation"},
@@ -144,8 +157,18 @@ func TestCatalogVideoFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get video: %v", err)
 	}
+	if video.PublicID != "ksKCMmvOxwQ" {
+		t.Fatalf("unexpected public id: %+v", video)
+	}
 	if video.Format != "video" || video.Category != "Documentaries" {
 		t.Fatalf("unexpected catalog fields: %+v", video)
+	}
+	byPublicID, err := st.GetVideo(context.Background(), "ksKCMmvOxwQ")
+	if err != nil {
+		t.Fatalf("get video by public id: %v", err)
+	}
+	if byPublicID.ID != video.ID {
+		t.Fatalf("public id resolved to %s, expected %s", byPublicID.ID, video.ID)
 	}
 	if len(video.Tags) != 3 || video.Tags[1] != "lighthouse" {
 		t.Fatalf("unexpected tags: %+v", video.Tags)

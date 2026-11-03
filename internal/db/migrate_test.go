@@ -44,6 +44,7 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 	}{
 		{"channels", "subscribers"},
 		{"channels", "verified"},
+		{"videos", "public_id"},
 		{"videos", "format"},
 		{"videos", "category"},
 		{"videos", "tags"},

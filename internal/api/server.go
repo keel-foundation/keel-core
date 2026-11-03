@@ -104,6 +104,7 @@ func (s *Server) writeChannel(w http.ResponseWriter, r *http.Request, id string)
 		s.writeStoreError(w, err)
 		return
 	}
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, channel)
 }
 
@@ -120,6 +121,11 @@ func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
 	if !s.ensureVideoAccess(w, r, video) {
 		return
 	}
+	if isPublicVideo(video) {
+		setPublicCache(w)
+	} else {
+		setPrivateCache(w)
+	}
 	writeJSON(w, http.StatusOK, video)
 }
 
@@ -129,6 +135,7 @@ func (s *Server) writeVideo(w http.ResponseWriter, r *http.Request, id string) {
 		s.writeStoreError(w, err)
 		return
 	}
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, video)
 }
 
@@ -143,6 +150,7 @@ func (s *Server) demo(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, err)
 		return
 	}
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"video":   video,
 		"channel": channel,

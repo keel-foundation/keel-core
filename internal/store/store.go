@@ -51,6 +51,7 @@ type Policy struct {
 
 type Video struct {
 	ID              string     `json:"id"`
+	PublicID        string     `json:"public_id"`
 	ChannelID       string     `json:"channel_id"`
 	Title           string     `json:"title"`
 	Description     string     `json:"description,omitempty"`
@@ -120,7 +121,10 @@ func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
 }
 
 func (s *Store) GetVideo(ctx context.Context, id string) (Video, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+videoColumns+` FROM videos WHERE id = $1`, id)
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+videoColumns+` FROM videos WHERE id = $1 OR public_id = $1 LIMIT 1`,
+		id,
+	)
 	video, err := scanVideo(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Video{}, ErrNotFound
@@ -203,12 +207,13 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO videos (
-			id, channel_id, title, description, status, visibility, content_hash,
+			id, public_id, channel_id, title, description, status, visibility, content_hash,
 			duration_seconds, playback, license, policy, format, category, tags,
 			views, likes, comments_count, created_at, published_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (id) DO UPDATE SET
+			public_id = EXCLUDED.public_id,
 			channel_id = EXCLUDED.channel_id,
 			title = EXCLUDED.title,
 			description = EXCLUDED.description,
@@ -227,7 +232,7 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 			comments_count = EXCLUDED.comments_count,
 			published_at = EXCLUDED.published_at,
 			updated_at = EXCLUDED.updated_at
-	`, video.ID, video.ChannelID, video.Title, video.Description, video.Status,
+	`, video.ID, video.PublicID, video.ChannelID, video.Title, video.Description, video.Status,
 		video.Visibility, video.ContentHash, video.DurationSeconds, playback, video.License,
 		policy, video.Format, video.Category, tagsJSON, video.Views, video.Likes,
 		video.CommentsCount, video.CreatedAt, publishedAt, video.UpdatedAt,

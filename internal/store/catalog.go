@@ -16,7 +16,7 @@ var (
 )
 
 const (
-	videoColumns        = `id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
+	videoColumns        = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
 	channelColumns      = `id, actor_id, handle, name, description, avatar_url, subscribers, verified, created_at, updated_at`
 	channelStatsColumns = `(SELECT COUNT(*) FROM videos v
 		WHERE v.channel_id = channels.id
@@ -52,10 +52,10 @@ func scanVideo(scanner rowScanner) (Video, error) {
 	var playbackJSON, policyJSON, tagsJSON []byte
 	var publishedAt sql.NullTime
 	err := scanner.Scan(
-		&video.ID, &video.ChannelID, &video.Title, &video.Description, &video.Status,
-		&video.Visibility, &video.ContentHash, &video.DurationSeconds, &playbackJSON,
-		&video.License, &policyJSON, &video.Format, &video.Category, &tagsJSON,
-		&video.Views, &video.Likes, &video.CommentsCount, &video.CreatedAt,
+		&video.ID, &video.PublicID, &video.ChannelID, &video.Title, &video.Description,
+		&video.Status, &video.Visibility, &video.ContentHash, &video.DurationSeconds,
+		&playbackJSON, &video.License, &policyJSON, &video.Format, &video.Category,
+		&tagsJSON, &video.Views, &video.Likes, &video.CommentsCount, &video.CreatedAt,
 		&publishedAt, &video.UpdatedAt,
 	)
 	if err != nil {

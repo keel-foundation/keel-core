@@ -15,6 +15,7 @@ var demoTime = time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 
 type seedVideo struct {
 	ID          string
+	PublicID    string
 	ChannelID   string
 	Title       string
 	Description string
@@ -156,6 +157,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		}
 		return store.Video{
 			ID:              video.ID,
+			PublicID:        video.PublicID,
 			ChannelID:       video.ChannelID,
 			Title:           video.Title,
 			Description:     video.Description,
@@ -185,6 +187,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 	videos := []seedVideo{
 		{
 			ID:          "vid_demo_001",
+			PublicID:    "ksKCMmvOxwQ",
 			ChannelID:   "ch_demo",
 			Title:       "The Last Lighthouse",
 			Description: "A short original documentary about a keeper on his final night. Shot on the outer breakwater over one long exposure of weather, salt, and routine.",
@@ -202,6 +205,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_even_keel",
+			PublicID:    "aB3dEf9hJkL",
 			ChannelID:   "ch_keel_lab",
 			Title:       "What an even keel actually means",
 			Description: "Why stability, due process, and a portable exit belong in the video protocol.",
@@ -219,6 +223,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_ledger",
+			PublicID:    "mN4pQr7sTuV",
 			ChannelID:   "ch_keel_lab",
 			Title:       "Inside the audit ledger",
 			Description: "How an append-only, hash-chained record makes moderation reviewable.",
@@ -236,6 +241,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_studio",
+			PublicID:    "wX2yZa5bCdE",
 			ChannelID:   "ch_northstar",
 			Title:       "Build a creator studio",
 			Description: "The workflow behind a channel that can move with its creator.",
@@ -253,6 +259,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_federation",
+			PublicID:    "fG6hIj8kLmN",
 			ChannelID:   "ch_open_archive",
 			Title:       "Federation without a gatekeeper",
 			Description: "Portability, PeerTube compatibility, and the exit that stays open.",
@@ -270,6 +277,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_short_keel",
+			PublicID:    "hI3jKl5mNoP",
 			ChannelID:   "ch_keel_lab",
 			Title:       "The even keel in 30 seconds",
 			Description: "A short on stability, due process, and the portable exit.",
@@ -287,6 +295,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_short_appeal",
+			PublicID:    "qR7sTu9vWxY",
 			ChannelID:   "ch_keel_lab",
 			Title:       "How an appeal works",
 			Description: "Grounds, evidence, independent review, and a recorded outcome.",
@@ -304,6 +313,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_short_export",
+			PublicID:    "zA4bCd6eFgH",
 			ChannelID:   "ch_northstar",
 			Title:       "Export your archive",
 			Description: "Your videos, metadata, and record should leave with you.",
@@ -321,6 +331,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_removed_001",
+			PublicID:    "eF4gHi6jKlM",
 			ChannelID:   "ch_demo",
 			Title:       "Removed demo video",
 			Description: "A fixture used to verify the removed-video notice.",
@@ -334,6 +345,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_private_001",
+			PublicID:    "nO8pQr1sTuV",
 			ChannelID:   "ch_demo",
 			Title:       "Private demo video",
 			Description: "A fixture used to verify the restricted-video notice.",
@@ -347,7 +359,23 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 			Thumbnail:   "/mock/ksKCMmvOxwQ.jpg",
 		},
 		{
+			ID:          "vid_unlisted_001",
+			PublicID:    "uK3nLx9pQ2r",
+			ChannelID:   "ch_demo",
+			Title:       "Unlisted demo video",
+			Description: "A fixture used to verify unlisted access by id.",
+			Status:      "published",
+			Visibility:  "unlisted",
+			Format:      "video",
+			Category:    "Documentaries",
+			Tags:        []string{"documentary"},
+			Duration:    8,
+			PublishedAt: at(demoTime),
+			Thumbnail:   "/mock/ksKCMmvOxwQ.jpg",
+		},
+		{
 			ID:          "vid_draft_001",
+			PublicID:    "fG5hIj7kLmN",
 			ChannelID:   "ch_demo",
 			Title:       "Draft demo video",
 			Description: "A fixture used to verify draft visibility.",
@@ -360,6 +388,7 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, d
 		},
 		{
 			ID:          "vid_processing_001",
+			PublicID:    "oP9qRs2tUvW",
 			ChannelID:   "ch_demo",
 			Title:       "Processing demo video",
 			Description: "A fixture used to verify processing visibility.",

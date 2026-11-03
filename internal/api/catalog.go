@@ -16,6 +16,7 @@ import (
 const (
 	defaultLimit           = 20
 	maxLimit               = 50
+	maxOffset              = 10_000
 	defaultExploreLimit    = 8
 	maxExploreLimit        = 24
 	defaultCollectionLimit = 4
@@ -143,6 +144,7 @@ func (s *Server) writeVideoList(
 		s.writeStoreError(w, err)
 		return
 	}
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, newPage(videos, filter.Limit, filter.Offset, total))
 }
 
@@ -271,6 +273,7 @@ func (s *Server) explore(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, exploreResponse{
 		Featured:    featured,
 		New:         newPage(newVideos, limit, 0, newTotal),
@@ -304,6 +307,11 @@ func (s *Server) relatedVideos(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	if isPublicVideo(video) {
+		setPublicCache(w)
+	} else {
+		setPrivateCache(w)
 	}
 	writeJSON(w, http.StatusOK, newPage(videos, limit, offset, total))
 }
@@ -369,6 +377,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, searchResponse{
 		Videos:   newPage(videos, limit, offset, totalVideos),
 		Channels: newPage(channels, limit, offset, totalChannels),
@@ -388,16 +397,18 @@ func (s *Server) categories(w http.ResponseWriter, r *http.Request) {
 			VideoCount: count.VideoCount,
 		})
 	}
+	setPublicCache(w)
 	writeJSON(w, http.StatusOK, categoriesResponse{Categories: categories})
 }
 
 func (s *Server) ensureVideoAccess(w http.ResponseWriter, r *http.Request, video store.Video) bool {
 	if video.Status == "removed" {
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusGone, map[string]string{"detail": "This video was removed."})
 		return false
 	}
-	if (video.Status == "published" || video.Status == "demonetized") &&
-		(video.Visibility == "public" || video.Visibility == "unlisted") {
+	if isPublicVideo(video) ||
+		((video.Status == "published" || video.Status == "demonetized") && video.Visibility == "unlisted") {
 		return true
 	}
 
@@ -406,6 +417,7 @@ func (s *Server) ensureVideoAccess(w http.ResponseWriter, r *http.Request, video
 		if !errors.Is(err, auth.ErrUnauthorized) {
 			log.Printf("catalog auth failed: %v", err)
 		}
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not found"})
 		return false
 	}
@@ -415,10 +427,24 @@ func (s *Server) ensureVideoAccess(w http.ResponseWriter, r *http.Request, video
 		return false
 	}
 	if actorID != principal.ID {
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not found"})
 		return false
 	}
 	return true
+}
+
+func isPublicVideo(video store.Video) bool {
+	return (video.Status == "published" || video.Status == "demonetized") &&
+		video.Visibility == "public"
+}
+
+func setPublicCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
+}
+
+func setPrivateCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "private, no-store")
 }
 
 func writeCatalogError(w http.ResponseWriter, err error) {
@@ -457,10 +483,10 @@ func queryOffset(r *http.Request) (int, error) {
 		return 0, nil
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil || value < 0 {
+	if err != nil || value < 0 || value > maxOffset {
 		return 0, &validationError{
 			Field:   "offset",
-			Message: "offset must be zero or greater",
+			Message: fmt.Sprintf("offset must be between 0 and %d", maxOffset),
 		}
 	}
 	return value, nil

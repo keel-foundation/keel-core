@@ -3,11 +3,14 @@ package api_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
+
+var publicVideoIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{11}$`)
 
 type catalogVideoPage struct {
 	Items   []store.Video `json:"items"`
@@ -77,9 +80,15 @@ func TestCatalogFeed(t *testing.T) {
 	if page.HasMore {
 		t.Fatal("expected no next page")
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=60" {
+		t.Fatalf("unexpected feed cache header: %q", got)
+	}
 	for _, video := range page.Items {
 		if video.Format != "video" || video.Visibility != "public" {
 			t.Fatalf("unexpected feed video: %+v", video)
+		}
+		if !publicVideoIDPattern.MatchString(video.PublicID) {
+			t.Fatalf("unexpected public video id: %q", video.PublicID)
 		}
 	}
 }
@@ -93,6 +102,7 @@ func TestCatalogVideosValidation(t *testing.T) {
 		{"/api/v1/videos?limit=0", "limit"},
 		{"/api/v1/videos?limit=51", "limit"},
 		{"/api/v1/videos?offset=-1", "offset"},
+		{"/api/v1/videos?offset=10001", "offset"},
 		{"/api/v1/videos?sort=bogus", "sort"},
 		{"/api/v1/videos?format=bogus", "format"},
 		{"/api/v1/videos?category=bogus", "category"},
@@ -158,34 +168,59 @@ func TestCatalogVideoVisibility(t *testing.T) {
 	}
 	handler := newHandler(t, token)
 
-	public := catalogGet(t, handler, "/api/v1/videos/vid_demo_001", "")
+	public := catalogGet(t, handler, "/api/v1/videos/ksKCMmvOxwQ", "")
 	if public.Code != http.StatusOK {
 		t.Fatalf("public video: expected 200, got %d", public.Code)
 	}
+	if got := public.Header().Get("Cache-Control"); got != "public, max-age=60" {
+		t.Fatalf("unexpected public video cache header: %q", got)
+	}
 	video := decode[store.Video](t, public)
+	if video.ID != "vid_demo_001" || video.PublicID != "ksKCMmvOxwQ" {
+		t.Fatalf("unexpected public video identity: %+v", video)
+	}
 	if video.Format != "video" || video.Category != "Documentaries" || len(video.Tags) != 3 {
 		t.Fatalf("unexpected public video fields: %+v", video)
 	}
 
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_private_001", ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("private video anonymous: expected 404, got %d", rec.Code)
+	unlisted := catalogGet(t, handler, "/api/v1/videos/uK3nLx9pQ2r", "")
+	if unlisted.Code != http.StatusOK {
+		t.Fatalf("unlisted video: expected 200, got %d", unlisted.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_private_001", token); rec.Code != http.StatusOK {
-		t.Fatalf("private video owner: expected 200, got %d", rec.Code)
+	if got := unlisted.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("unexpected unlisted video cache header: %q", got)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_removed_001", ""); rec.Code != http.StatusGone {
-		t.Fatalf("removed video: expected 410, got %d", rec.Code)
+	privateAnonymous := catalogGet(t, handler, "/api/v1/videos/nO8pQr1sTuV", "")
+	if privateAnonymous.Code != http.StatusNotFound {
+		t.Fatalf("private video anonymous: expected 404, got %d", privateAnonymous.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_draft_001", ""); rec.Code != http.StatusNotFound {
+	if got := privateAnonymous.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected private anonymous cache header: %q", got)
+	}
+	privateOwner := catalogGet(t, handler, "/api/v1/videos/nO8pQr1sTuV", token)
+	if privateOwner.Code != http.StatusOK {
+		t.Fatalf("private video owner: expected 200, got %d", privateOwner.Code)
+	}
+	if got := privateOwner.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("unexpected private owner cache header: %q", got)
+	}
+	removed := catalogGet(t, handler, "/api/v1/videos/eF4gHi6jKlM", "")
+	if removed.Code != http.StatusGone {
+		t.Fatalf("removed video: expected 410, got %d", removed.Code)
+	}
+	if got := removed.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected removed video cache header: %q", got)
+	}
+	if rec := catalogGet(t, handler, "/api/v1/videos/fG5hIj7kLmN", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("draft video anonymous: expected 404, got %d", rec.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_draft_001", token); rec.Code != http.StatusOK {
+	if rec := catalogGet(t, handler, "/api/v1/videos/fG5hIj7kLmN", token); rec.Code != http.StatusOK {
 		t.Fatalf("draft video owner: expected 200, got %d", rec.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_processing_001", ""); rec.Code != http.StatusNotFound {
+	if rec := catalogGet(t, handler, "/api/v1/videos/oP9qRs2tUvW", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("processing video anonymous: expected 404, got %d", rec.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_processing_001", token); rec.Code != http.StatusOK {
+	if rec := catalogGet(t, handler, "/api/v1/videos/oP9qRs2tUvW", token); rec.Code != http.StatusOK {
 		t.Fatalf("processing video owner: expected 200, got %d", rec.Code)
 	}
 	if rec := catalogGet(t, handler, "/api/v1/videos/vid_missing", ""); rec.Code != http.StatusNotFound {
@@ -335,7 +370,7 @@ func TestCatalogRelated(t *testing.T) {
 	}
 	handler := newHandler(t, token)
 
-	rec := catalogGet(t, handler, "/api/v1/videos/vid_even_keel/related", "")
+	rec := catalogGet(t, handler, "/api/v1/videos/aB3dEf9hJkL/related", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -343,8 +378,8 @@ func TestCatalogRelated(t *testing.T) {
 	if page.Total != 7 || len(page.Items) != 7 {
 		t.Fatalf("expected 7 related videos, got total=%d len=%d", page.Total, len(page.Items))
 	}
-	if page.Items[0].ID != "vid_short_keel" {
-		t.Fatalf("expected category match first, got %s", page.Items[0].ID)
+	if page.Items[0].ID != "vid_short_keel" || page.Items[0].PublicID != "hI3jKl5mNoP" {
+		t.Fatalf("expected category match first, got %+v", page.Items[0])
 	}
 	for _, video := range page.Items {
 		if video.ID == "vid_even_keel" {
@@ -352,10 +387,10 @@ func TestCatalogRelated(t *testing.T) {
 		}
 	}
 
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_private_001/related", ""); rec.Code != http.StatusNotFound {
+	if rec := catalogGet(t, handler, "/api/v1/videos/nO8pQr1sTuV/related", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("private related anonymous: expected 404, got %d", rec.Code)
 	}
-	if rec := catalogGet(t, handler, "/api/v1/videos/vid_private_001/related", token); rec.Code != http.StatusOK {
+	if rec := catalogGet(t, handler, "/api/v1/videos/nO8pQr1sTuV/related", token); rec.Code != http.StatusOK {
 		t.Fatalf("private related owner: expected 200, got %d", rec.Code)
 	}
 	if rec := catalogGet(t, handler, "/api/v1/videos/vid_missing/related", ""); rec.Code != http.StatusNotFound {
