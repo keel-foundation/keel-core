@@ -28,10 +28,11 @@ func Open(t *testing.T) *sql.DB {
 		t.Fatalf("migrate test database: %v", err)
 	}
 	if _, err := conn.ExecContext(ctx, `
-		TRUNCATE comment_likes, comments, watch_history, saved_videos, video_reactions,
-		         subscriptions, actor_embeddings, video_embeddings, auth_events,
-		         password_resets, email_verifications, sessions, accounts, videos,
-		         channels, actors
+		TRUNCATE media_scans, media_jobs, media_assets, video_subtitles, video_versions,
+		         media_uploads, media_blocklist, comment_likes, comments, watch_history,
+		         saved_videos, video_reactions, subscriptions, actor_embeddings,
+		         video_embeddings, auth_events, password_resets, email_verifications,
+		         sessions, accounts, videos, channels, actors
 		RESTART IDENTITY CASCADE
 	`); err != nil {
 		t.Fatalf("truncate test database: %v", err)

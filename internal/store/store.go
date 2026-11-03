@@ -47,6 +47,12 @@ type Playback struct {
 type Policy struct {
 	PolicyVersion      string `json:"policy_version,omitempty"`
 	MonetizationStatus string `json:"monetization_status,omitempty"`
+	UploadStatus       string `json:"upload_status,omitempty"`
+	ScanVerdict        string `json:"scan_verdict,omitempty"`
+	ScanReason         string `json:"scan_reason,omitempty"`
+	RightsDeclaration  string `json:"rights_declaration,omitempty"`
+	RightsHolder       string `json:"rights_holder,omitempty"`
+	RightsNotes        string `json:"rights_notes,omitempty"`
 }
 
 type Video struct {
@@ -176,42 +182,46 @@ func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
 	return err
 }
 
-func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
+func videoValues(video Video) ([]any, error) {
 	playback, err := json.Marshal(video.Playback)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	var policy any
 	if video.Policy != nil {
 		body, err := json.Marshal(video.Policy)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		policy = body
 	}
-
 	tags := video.Tags
 	if tags == nil {
 		tags = []string{}
 	}
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	var publishedAt any
 	if video.PublishedAt != nil {
 		publishedAt = *video.PublishedAt
 	}
+	return []any{
+		video.ID, video.PublicID, video.ChannelID, video.Title, video.Description,
+		video.Status, video.Visibility, video.ContentHash, video.DurationSeconds,
+		playback, video.License, policy, video.Format, video.Category, tagsJSON,
+		video.Views, video.Likes, video.CommentsCount, video.CreatedAt, publishedAt,
+		video.UpdatedAt,
+	}, nil
+}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO videos (
-			id, public_id, channel_id, title, description, status, visibility, content_hash,
-			duration_seconds, playback, license, policy, format, category, tags,
-			views, likes, comments_count, created_at, published_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
+	values, err := videoValues(video)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, videoInsert+`
 		ON CONFLICT (id) DO UPDATE SET
 			public_id = EXCLUDED.public_id,
 			channel_id = EXCLUDED.channel_id,
@@ -232,10 +242,6 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 			comments_count = EXCLUDED.comments_count,
 			published_at = EXCLUDED.published_at,
 			updated_at = EXCLUDED.updated_at
-	`, video.ID, video.PublicID, video.ChannelID, video.Title, video.Description, video.Status,
-		video.Visibility, video.ContentHash, video.DurationSeconds, playback, video.License,
-		policy, video.Format, video.Category, tagsJSON, video.Views, video.Likes,
-		video.CommentsCount, video.CreatedAt, publishedAt, video.UpdatedAt,
-	)
+	`, values...)
 	return err
 }

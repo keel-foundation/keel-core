@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/keel-foundation/keel-core/internal/api"
@@ -15,6 +17,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/mailer"
+	"github.com/keel-foundation/keel-core/internal/media"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
@@ -84,6 +87,21 @@ func main() {
 		discovery.DefaultConfig(),
 	)
 
+	mediaConfig, err := media.FromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("configure media: %v", err)
+	}
+	var mediaEngine *media.Engine
+	if mediaConfig.Enabled() {
+		mediaEngine, err = media.New(ctx, st, mediaConfig)
+		if err != nil {
+			log.Fatalf("configure media engine: %v", err)
+		}
+		mediaEngine.OnPublish = func(ctx context.Context, videoID string) error {
+			return discoveryEngine.RefreshVideo(ctx, videoID)
+		}
+	}
+
 	devAuthenticator := auth.NewDev(
 		config.EnvOrDefault("KEELTUBE_DEV_ACTOR_ID", "usr_demo"),
 		os.Getenv("KEELTUBE_DEV_ACTOR_TOKEN"),
@@ -95,6 +113,10 @@ func main() {
 		AllowSecondary: allowDev,
 	}
 
+	var studioMedia api.StudioMedia
+	if mediaEngine != nil {
+		studioMedia = mediaEngine
+	}
 	server := &http.Server{
 		Addr: addr,
 		Handler: api.New(api.Options{
@@ -102,6 +124,7 @@ func main() {
 			Auth:       authenticator,
 			Identity:   identityService,
 			Discovery:  discoveryEngine,
+			Media:      studioMedia,
 			Origins:    allowedOrigins(),
 			RateLimit:  authRateLimit,
 			RateWindow: authRateWindow,
@@ -113,6 +136,21 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if mediaEngine != nil {
+		mediaEngine.Start(runCtx)
+	}
+
+	go func() {
+		<-runCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+
 	log.Printf("keeltube core listening on %s", addr)
-	log.Fatal(server.ListenAndServe())
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }

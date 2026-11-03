@@ -16,7 +16,12 @@ var (
 )
 
 const (
-	videoColumns        = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
+	videoColumns = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
+	videoInsert  = `INSERT INTO videos (
+		id, public_id, channel_id, title, description, status, visibility, content_hash,
+		duration_seconds, playback, license, policy, format, category, tags,
+		views, likes, comments_count, created_at, published_at, updated_at
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`
 	videoColumnsV       = `v.id, v.public_id, v.channel_id, v.title, v.description, v.status, v.visibility, v.content_hash, v.duration_seconds, v.playback, v.license, v.policy, v.format, v.category, v.tags, v.views, v.likes, v.comments_count, v.created_at, v.published_at, v.updated_at`
 	channelColumns      = `id, actor_id, handle, name, description, avatar_url, subscribers, verified, created_at, updated_at`
 	channelStatsColumns = `(SELECT COUNT(*) FROM videos v

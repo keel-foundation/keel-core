@@ -5,9 +5,9 @@ moderation-facing domain model.
 
 **Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
 in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
-public catalog and discovery endpoints, and viewer engagement (subscriptions, reactions, saves,
-watch history, comments, and replies) are implemented. Social providers and full OIDC are not
-implemented yet.
+public catalog and discovery endpoints, viewer engagement (subscriptions, reactions, saves, watch
+history, comments, and replies), and the creator studio/media engine are implemented. Social
+providers and full OIDC are not implemented yet.
 
 ## Configuration
 
@@ -37,6 +37,35 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_EMBEDDINGS_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model id |
 | `KEELTUBE_EMBEDDINGS_DIMENSIONS` | `384` | Embedding dimensions; must match the pgvector column |
 | `KEELTUBE_EMBEDDINGS_TIMEOUT_SECONDS` | `30` | Embeddings request timeout |
+| `KEELTUBE_MEDIA_S3_BUCKET` | unset | S3-compatible bucket; unset disables studio upload routes |
+| `KEELTUBE_MEDIA_S3_REGION` | `us-east-1` | Bucket region |
+| `KEELTUBE_MEDIA_S3_ENDPOINT` | unset | S3-compatible endpoint for MinIO/R2 |
+| `KEELTUBE_MEDIA_S3_ACCESS_KEY_ID` | unset | Optional static S3 access key |
+| `KEELTUBE_MEDIA_S3_SECRET_ACCESS_KEY` | unset | Optional static S3 secret |
+| `KEELTUBE_MEDIA_S3_USE_PATH_STYLE` | endpoint-dependent | Use path-style bucket addressing |
+| `KEELTUBE_MEDIA_S3_PREFIX` | `media` | Object key prefix |
+| `KEELTUBE_MEDIA_PUBLIC_URL` | `http://localhost:8080` | Base URL used in playback links |
+| `KEELTUBE_MEDIA_PRESIGN_SECONDS` | `900` | Presigned upload/download lifetime |
+| `KEELTUBE_MEDIA_UPLOAD_TTL_SECONDS` | `86400` | Upload session lifetime; must exceed the presign lifetime |
+| `KEELTUBE_MEDIA_PART_SIZE_MB` | `64` | Multipart upload part size, minimum 5 |
+| `KEELTUBE_MEDIA_MAX_UPLOAD_MB` | `20480` | Maximum source file size |
+| `KEELTUBE_MEDIA_MAX_DURATION_SECONDS` | `14400` | Maximum source duration |
+| `KEELTUBE_MEDIA_MIN_DURATION_SECONDS` | `1` | Minimum source duration |
+| `KEELTUBE_MEDIA_WORKERS` | `2` | In-process media worker count |
+| `KEELTUBE_MEDIA_POLL_SECONDS` | `2` | Queue poll interval |
+| `KEELTUBE_MEDIA_JOB_TIMEOUT_SECONDS` | `3600` | Per-job processing timeout |
+| `KEELTUBE_MEDIA_JOB_LEASE_SECONDS` | `1800` | Stale job reclaim lease |
+| `KEELTUBE_MEDIA_FFMPEG` | `ffmpeg` | ffmpeg binary |
+| `KEELTUBE_MEDIA_FFPROBE` | `ffprobe` | ffprobe binary |
+| `KEELTUBE_MEDIA_WORK_DIR` | system temp | Scratch directory for processing |
+| `KEELTUBE_MEDIA_MAX_RENDITION_HEIGHT` | `1080` | Highest HLS rendition to generate |
+| `KEELTUBE_MEDIA_HLS_SEGMENT_SECONDS` | `6` | HLS segment length |
+| `KEELTUBE_MEDIA_ALLOWED_EXTENSIONS` | common video extensions | Upload extension allowlist |
+| `KEELTUBE_MEDIA_ALLOWED_CONTENT_TYPES` | common video MIME types | Upload MIME allowlist |
+| `KEELTUBE_MEDIA_POLICY_TERMS` | unset | Comma-separated metadata block terms |
+| `KEELTUBE_MEDIA_SCANNER_URL` | unset | Optional external copyright/policy scanner |
+| `KEELTUBE_MEDIA_SCANNER_TOKEN` | unset | Bearer token for the external scanner |
+| `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -158,14 +187,111 @@ remain available to anonymous viewers.
 `POST /api/v1/videos/{id}/view` records watch history and increments the public view counter for
 each authenticated request. Time-window view deduplication is future work.
 
+## Creator Studio and media engine
+
+The studio module adds creator-scoped video management, immutable edit versions, resumable
+S3-compatible multipart uploads, deterministic copyright/policy checks, and background HLS
+transcoding. The media engine lives in `internal/media` and runs in-process with a PostgreSQL-backed
+job queue. Upload bytes go directly from the browser to the bucket through short-lived presigned
+part URLs; core never proxies media bytes.
+
+The bucket is private. Playback URLs point at core, which checks video access and redirects to a
+short-lived presigned S3 GET. HLS manifests are streamed by core and segments are redirected, so
+private and unlisted visibility rules apply to every segment request. Subtitle tracks use the same
+gateway and become the video's `captions_url` when finalized.
+
+### Studio endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/studio/channel` | Current creator channel |
+| `GET` | `/api/v1/studio/videos` | All own videos, including drafts and processing |
+| `POST` | `/api/v1/studio/videos` | Create a draft |
+| `GET` | `/api/v1/studio/videos/{id}` | Read an own video |
+| `PATCH` | `/api/v1/studio/videos/{id}` | Update title, description, visibility, category, license, format, tags |
+| `POST` | `/api/v1/studio/videos/{id}/publish` | Publish a ready video |
+| `POST` | `/api/v1/studio/videos/{id}/unpublish` | Make a published video private |
+| `GET` | `/api/v1/studio/videos/{id}/versions` | List immutable versions |
+| `POST` | `/api/v1/studio/videos/{id}/versions` | Append a version |
+| `GET` | `/api/v1/studio/videos/{id}/versions/{version_id}` | Read one version |
+| `POST` | `/api/v1/studio/videos/{id}/thumbnail` | Create a presigned custom thumbnail upload |
+| `POST` | `/api/v1/studio/videos/{id}/thumbnail/complete` | Validate and attach a custom thumbnail |
+| `GET` | `/api/v1/studio/videos/{id}/subtitles` | List subtitle tracks |
+| `POST` | `/api/v1/studio/videos/{id}/subtitles` | Create a presigned subtitle upload |
+| `POST` | `/api/v1/studio/videos/{id}/subtitles/{track_id}/complete` | Finalize a subtitle track |
+| `DELETE` | `/api/v1/studio/videos/{id}/subtitles/{track_id}` | Delete a subtitle track |
+| `GET` | `/api/v1/studio/stats` | Own-channel counts, views, likes, comments, recent uploads |
+| `POST` | `/api/v1/studio/uploads` | Create a multipart upload intent and presigned part URLs |
+| `GET` | `/api/v1/studio/uploads/{id}` | Poll upload, scan, and processing status |
+| `GET` | `/api/v1/studio/uploads/{id}/scans` | Read copyright/policy scan findings |
+| `POST` | `/api/v1/studio/uploads/{id}/parts` | Refresh presigned part URLs for a long upload |
+| `POST` | `/api/v1/studio/uploads/{id}/complete` | Complete multipart upload and enqueue scanning |
+| `DELETE` | `/api/v1/studio/uploads/{id}` | Abort an in-progress upload |
+
+Subtitle playback is served by `GET /api/v1/media/{id}/subtitles/{track_id}` through the same
+private media gateway as HLS and MP4 playback.
+
+All studio endpoints require a session principal and CSRF for unsafe methods. Another creator’s
+video returns `404`. Creators cannot set moderation-controlled statuses (`removed`, `demonetized`),
+counters, policy versions, content hashes, or public IDs.
+
+### Upload and processing flow
+
+1. `POST /studio/uploads` validates metadata, extension, MIME type, size, declared hash, rights
+   declaration, and configured policy terms. It creates a private draft and an S3 multipart upload.
+2. The browser uploads parts directly to S3 with the returned presigned URLs. Long uploads can
+   refresh part URLs with `POST /studio/uploads/{id}/parts` until the upload session expires.
+3. `POST /studio/uploads/{id}/complete` verifies part count and size, completes the multipart
+   upload, and enqueues a scan job.
+4. The scan job downloads the source, computes SHA-256, probes it with ffprobe, checks the hash
+   blocklist, detects duplicate published content on other channels, and runs the configured
+   scanner. Scanner errors fail closed and are retried.
+5. Allowed or review-only uploads enqueue a transcode job. Blocked uploads remain drafts with a
+   policy scan reason.
+6. The transcode job generates H.264/AAC HLS renditions, an optimized MP4 fallback, a thumbnail,
+   and captions from an embedded subtitle stream, then uploads them to the bucket.
+7. Allowed uploads publish automatically. Review-only uploads keep a draft with playback ready for
+   the creator. `GET /studio/uploads/{id}` exposes the current state.
+8. Subtitle tracks are uploaded separately with `POST /studio/videos/{id}/subtitles`, finalized with
+   the `complete` endpoint, and become the video `captions_url`. Deleting the active track clears or
+   repoints the URL to the next ready track or embedded captions.
+9. Custom thumbnails use `POST /studio/videos/{id}/thumbnail` and the matching `complete` endpoint.
+   Completion verifies the image decodes as JPEG/PNG and updates the thumbnail media asset.
+
+HLS renditions are selected up to `KEELTUBE_MEDIA_MAX_RENDITION_HEIGHT` and never upscaled. The
+processor runs ffmpeg/ffprobe without a shell, limits source size and duration, writes scratch files
+with `0600` permissions, and cleans up temporary directories.
+
+### Bucket requirements
+
+- Keep the bucket private. Do not grant public read.
+- Grant the core identity `s3:CreateMultipartUpload`, `s3:UploadPart`, `s3:CompleteMultipartUpload`,
+  `s3:AbortMultipartUpload`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and `s3:HeadObject`
+  on the configured prefix.
+- Configure bucket CORS for the web origin with `GET`, `HEAD`, `PUT`, and the `ETag` response header
+  so direct multipart uploads and HLS playback work.
+- Install `ffmpeg` and `ffprobe` in the runtime image. The repository Dockerfile includes them.
+
+### External copyright/policy scanner
+
+The built-in checks are deterministic: MIME/extension/size/duration validation, SHA-256 blocklist
+matches, duplicate-content review, metadata terms, link spam, and control characters. Real
+fingerprint matching needs an external corpus. Set `KEELTUBE_MEDIA_SCANNER_URL` to a provider that
+accepts the JSON scan input and returns:
+
+```json
+{"verdict":"allow|review|block","findings":[{"code":"...","message":"...","severity":"...","kind":"copyright"}]}
+```
+
+Provider errors are not treated as approval; the job retries and eventually fails closed.
+
 ## Next
 
-1. Add creator studio write endpoints (metadata updates, status and visibility, versions) and an
-   upload handshake.
-2. Replace the dev fallback with full OIDC behind the same authenticator interface.
-3. Connect approved Google, Apple, and X providers.
-4. Add per-creator scoping to the moderation client contract.
-5. Add report ingestion to the moderation service, not core.
+1. Replace the dev fallback with full OIDC behind the same authenticator interface.
+2. Connect approved Google, Apple, and X providers.
+3. Add per-creator scoping to the moderation client contract.
+4. Add report ingestion to the moderation service, not core.
+5. Add server-signed creator export bundles and monetization/payout integration.
 
 ## Licensing
 

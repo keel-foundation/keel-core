@@ -19,6 +19,7 @@ type Options struct {
 	Auth       auth.Authenticator
 	Identity   *identity.Service
 	Discovery  *discovery.Engine
+	Media      StudioMedia
 	Origins    []string
 	RateLimit  int
 	RateWindow time.Duration
@@ -30,6 +31,7 @@ type Server struct {
 	auth       auth.Authenticator
 	identity   *identity.Service
 	discovery  *discovery.Engine
+	media      StudioMedia
 	limiter    *rateLimiter
 	trustProxy bool
 }
@@ -48,6 +50,7 @@ func New(options Options) http.Handler {
 		auth:       options.Auth,
 		identity:   options.Identity,
 		discovery:  discoveryEngine,
+		media:      options.Media,
 		trustProxy: options.TrustProxy,
 	}
 	if options.RateLimit > 0 {
@@ -93,6 +96,38 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/videos/{id}/comments", s.createComment)
 	mux.HandleFunc("POST /api/v1/comments/{id}/like", s.likeComment)
 	mux.HandleFunc("DELETE /api/v1/comments/{id}/like", s.unlikeComment)
+
+	mux.HandleFunc("GET /api/v1/studio/channel", s.studioChannel)
+	mux.HandleFunc("GET /api/v1/studio/videos", s.listStudioVideos)
+	mux.HandleFunc("POST /api/v1/studio/videos", s.createStudioVideo)
+	mux.HandleFunc("GET /api/v1/studio/videos/{id}", s.getStudioVideo)
+	mux.HandleFunc("PATCH /api/v1/studio/videos/{id}", s.updateStudioVideo)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/publish", s.publishStudioVideo)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/unpublish", s.unpublishStudioVideo)
+	mux.HandleFunc("GET /api/v1/studio/videos/{id}/versions", s.listStudioVersions)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/versions", s.createStudioVersion)
+	mux.HandleFunc("GET /api/v1/studio/videos/{id}/versions/{version_id}", s.getStudioVersion)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/thumbnail", s.createStudioThumbnail)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/thumbnail/complete", s.completeStudioThumbnail)
+	mux.HandleFunc("GET /api/v1/studio/videos/{id}/subtitles", s.listStudioSubtitles)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/subtitles", s.createStudioSubtitle)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/subtitles/{track_id}/complete", s.completeStudioSubtitle)
+	mux.HandleFunc("DELETE /api/v1/studio/videos/{id}/subtitles/{track_id}", s.deleteStudioSubtitle)
+	mux.HandleFunc("GET /api/v1/studio/stats", s.studioStats)
+	mux.HandleFunc("POST /api/v1/studio/uploads", s.createStudioUpload)
+	mux.HandleFunc("GET /api/v1/studio/uploads/{id}", s.getStudioUpload)
+	mux.HandleFunc("GET /api/v1/studio/uploads/{id}/scans", s.listStudioUploadScans)
+	mux.HandleFunc("POST /api/v1/studio/uploads/{id}/parts", s.refreshStudioUploadParts)
+	mux.HandleFunc("POST /api/v1/studio/uploads/{id}/complete", s.completeStudioUpload)
+	mux.HandleFunc("DELETE /api/v1/studio/uploads/{id}", s.abortStudioUpload)
+
+	mux.HandleFunc("GET /api/v1/media/{id}/video.mp4", s.mediaMP4)
+	mux.HandleFunc("GET /api/v1/media/{id}/thumbnail.jpg", s.mediaThumbnail)
+	mux.HandleFunc("GET /api/v1/media/{id}/captions.vtt", s.mediaCaptions)
+	mux.HandleFunc("GET /api/v1/media/{id}/subtitles/{track_id}", s.mediaSubtitleHandler)
+	mux.HandleFunc("GET /api/v1/media/{id}/hls/master.m3u8", s.mediaMaster)
+	mux.HandleFunc("GET /api/v1/media/{id}/hls/{rendition}/index.m3u8", s.mediaVariant)
+	mux.HandleFunc("GET /api/v1/media/{id}/hls/{rendition}/{segment}", s.mediaSegmentHandler)
 
 	if s.identity != nil {
 		mux.HandleFunc("POST /api/v1/auth/register", s.register)
@@ -233,7 +268,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if origin != "" && originAllowed(origin, origins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "600")

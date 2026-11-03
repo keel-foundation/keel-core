@@ -10,7 +10,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
 
 FROM alpine:3.20
 
-RUN adduser -D -u 10001 keel
+RUN apk add --no-cache ffmpeg ca-certificates \
+    && adduser -D -u 10001 keel
 COPY --from=build /out/api /api
 COPY --from=build /out/seed /seed
 USER keel
