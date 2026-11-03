@@ -20,7 +20,10 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 		t.Fatal("expected at least one applied migration")
 	}
 
-	for _, table := range []string{"actors", "channels", "videos"} {
+	for _, table := range []string{
+		"actors", "channels", "videos",
+		"accounts", "sessions", "email_verifications", "password_resets", "auth_events",
+	} {
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `
 			SELECT EXISTS (

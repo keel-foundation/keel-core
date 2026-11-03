@@ -3,12 +3,16 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/keel-foundation/keel-core/internal/api"
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/identity"
+	"github.com/keel-foundation/keel-core/internal/mailer"
 	"github.com/keel-foundation/keel-core/internal/seed"
 	"github.com/keel-foundation/keel-core/internal/store"
 	"github.com/keel-foundation/keel-core/internal/testutil"
@@ -18,10 +22,32 @@ func newHandler(t *testing.T, token string) http.Handler {
 	t.Helper()
 	conn := testutil.Open(t)
 	st := store.New(conn)
-	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000"); err != nil {
+	if err := seed.Run(context.Background(), st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return api.New(st, auth.NewDev("usr_demo", token), []string{"http://localhost:3000"})
+	identityService := identity.New(st, mailer.NewLog(io.Discard), testIdentityConfig())
+	authenticator := auth.Fallback{
+		Primary:        identityService,
+		Secondary:      auth.NewDev("usr_demo", token),
+		AllowSecondary: true,
+	}
+	return api.New(api.Options{
+		Store:      st,
+		Auth:       authenticator,
+		Identity:   identityService,
+		Origins:    []string{"http://localhost:3000"},
+		RateWindow: time.Minute,
+	})
+}
+
+func testIdentityConfig() identity.Config {
+	cfg := identity.DefaultConfig()
+	cfg.ExposeCodes = true
+	cfg.CookieSecure = false
+	cfg.SessionTTL = time.Hour
+	cfg.ResendCooldown = 0
+	cfg.MaxLoginAttempts = 3
+	return cfg
 }
 
 func request(t *testing.T, handler http.Handler, path, origin string) *httptest.ResponseRecorder {
@@ -116,13 +142,17 @@ func TestDevPrincipal(t *testing.T) {
 		t.Fatalf("unexpected principal: %+v", principal)
 	}
 
-	protected := newHandler(t, "secret")
+	devToken, err := auth.NewToken()
+	if err != nil {
+		t.Fatalf("generate dev token: %v", err)
+	}
+	protected := newHandler(t, devToken)
 	if rec := request(t, protected, "/api/v1/me", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Authorization", "Bearer "+devToken)
 	rec = httptest.NewRecorder()
 	protected.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -141,5 +171,19 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 	rec = request(t, handler, "/health", "http://localhost:3000")
 	if header := rec.Header().Get("Access-Control-Allow-Origin"); header != "http://localhost:3000" {
 		t.Fatalf("unexpected CORS header: %q", header)
+	}
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	preflight.Header.Set("Origin", "http://localhost:3000")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, preflight)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 preflight, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
+		t.Fatal("expected CORS methods on preflight")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("expected credentialed CORS, got %q", got)
 	}
 }

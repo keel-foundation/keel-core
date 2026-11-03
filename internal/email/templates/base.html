@@ -1,0 +1,150 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>{{.Subject}}</title>
+  <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
+  <![endif]-->
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body { background-color: #F7F5F7; color: #141414; }
+    img { border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    a { color: #693A69; }
+    .email-container { width: 100%; max-width: 560px; }
+    .email-card { background-color: #FFFFFF; }
+    .email-padding { padding: 32px 36px 28px 36px; }
+    .email-heading {
+      font-family: 'Manrope', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      font-size: 28px;
+      line-height: 34px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: #141414;
+      margin: 0;
+    }
+    .email-text {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      font-size: 16px;
+      line-height: 26px;
+      color: #4A454A;
+      margin: 0;
+    }
+    .email-muted {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      font-size: 13px;
+      line-height: 21px;
+      color: #6E676E;
+      margin: 0;
+    }
+    .email-code {
+      font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 32px;
+      line-height: 40px;
+      font-weight: 500;
+      letter-spacing: 0.28em;
+      color: #141414;
+      background-color: #FAF5FA;
+      padding: 18px 20px;
+      text-align: center;
+    }
+    .email-button-cell { background-color: #9C599C !important; border-radius: 4px; }
+    .email-button {
+      color: #FFFFFF !important;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      font-size: 15px;
+      line-height: 20px;
+      font-weight: 600;
+      text-decoration: none;
+      display: inline-block;
+      padding: 13px 22px;
+    }
+    .email-link { color: #693A69; text-decoration: underline; }
+    .email-logo-dark { display: none; }
+    @media screen and (max-width: 600px) {
+      .email-container { width: 100% !important; }
+      .email-padding { padding: 24px 22px !important; }
+      .email-heading { font-size: 24px !important; line-height: 30px !important; }
+      .email-code { font-size: 28px !important; letter-spacing: 0.22em !important; }
+    }
+    @media (prefers-color-scheme: dark) {
+      body, .email-bg { background-color: #0F0F0F !important; }
+      .email-card { background-color: #1D1A1D !important; }
+      .email-heading { color: #FFFFFF !important; }
+      .email-text { color: #D7D0D7 !important; }
+      .email-muted { color: #A8A0A8 !important; }
+      .email-code { background-color: #262226 !important; color: #FFFFFF !important; }
+      .email-button-cell { background-color: #9C599C !important; }
+      .email-button { color: #FFFFFF !important; }
+      .email-link { color: #C494C4 !important; }
+      .email-top-bar { background-color: #C494C4 !important; }
+      .email-logo-light { display: none !important; }
+      .email-logo-dark { display: block !important; }
+    }
+  </style>
+</head>
+<body class="email-bg" style="margin:0; padding:0; background-color:#F7F5F7;">
+  <div style="display:none; font-size:1px; color:#F7F5F7; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">{{.Preheader}}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-bg" style="background-color:#F7F5F7;">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" class="email-container" style="width:100%; max-width:560px;">
+          <tr>
+            <td class="email-card" style="background-color:#FFFFFF;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="email-top-bar" style="height:3px; background-color:#9C599C; line-height:3px; font-size:0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td class="email-padding">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding-bottom: 28px;">
+                          <img src="{{.LogoURL}}" width="180" height="41" alt="KeelTube" class="email-logo-light" style="display:block; width:180px; height:41px; border:0;">
+                          <img src="{{.LogoDarkURL}}" width="180" height="41" alt="KeelTube" class="email-logo-dark" style="display:none; width:180px; height:41px; border:0;">
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-bottom: 10px;">
+                          <p class="email-muted" style="font-size:11px; line-height:16px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#6E676E; margin:0;">{{.Eyebrow}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-bottom: 18px;">
+                          <h1 class="email-heading">{{.Heading}}</h1>
+                        </td>
+                      </tr>
+                      {{template "content" .}}
+                      <tr>
+                        <td style="padding-top: 30px;">
+                          <p class="email-muted">{{.FooterNote}}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 20px 4px 0 4px;">
+              <p class="email-muted" style="text-align:center;">KeelTube &middot; Creator-owned video with an even keel.</p>
+              <p class="email-muted" style="text-align:center; margin-top:6px;">This is a transactional message about your account.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>{{end}}

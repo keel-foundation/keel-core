@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -13,13 +14,24 @@ import (
 )
 
 func main() {
-	dsn := config.EnvOrDefault("KEELTUBE_DATABASE_URL", config.DefaultDatabaseURL)
+	if err := config.LoadDotEnv(".env"); err != nil {
+		log.Fatalf("load .env: %v", err)
+	}
+	dsn, err := config.RequireEnv("KEELTUBE_DATABASE_URL")
+	if err != nil {
+		log.Fatal(err)
+	}
 	pipelineURL := strings.TrimRight(
 		config.EnvOrDefault("KEELTUBE_PIPELINE_PUBLIC_URL", "http://localhost:8081"), "/",
 	)
 	webURL := strings.TrimRight(
 		config.EnvOrDefault("KEELTUBE_WEB_PUBLIC_URL", "http://localhost:3000"), "/",
 	)
+	demoEmail := strings.TrimSpace(os.Getenv("KEELTUBE_SEED_DEMO_EMAIL"))
+	demoPassword := os.Getenv("KEELTUBE_SEED_DEMO_PASSWORD")
+	if (demoEmail == "") != (demoPassword == "") {
+		log.Fatal("set both KEELTUBE_SEED_DEMO_EMAIL and KEELTUBE_SEED_DEMO_PASSWORD, or neither")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -33,7 +45,7 @@ func main() {
 	if err := db.Migrate(ctx, conn); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
-	if err := seed.Run(ctx, store.New(conn), pipelineURL, webURL); err != nil {
+	if err := seed.Run(ctx, store.New(conn), pipelineURL, webURL, demoEmail, demoPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
 	log.Printf("seeded demo actor, channel, and videos")

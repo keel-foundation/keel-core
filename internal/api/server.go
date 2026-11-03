@@ -9,16 +9,39 @@ import (
 	"time"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
-type Server struct {
-	store *store.Store
-	auth  auth.Authenticator
+type Options struct {
+	Store      *store.Store
+	Auth       auth.Authenticator
+	Identity   *identity.Service
+	Origins    []string
+	RateLimit  int
+	RateWindow time.Duration
+	TrustProxy bool
 }
 
-func New(st *store.Store, authenticator auth.Authenticator, origins []string) http.Handler {
-	s := &Server{store: st, auth: authenticator}
+type Server struct {
+	store      *store.Store
+	auth       auth.Authenticator
+	identity   *identity.Service
+	limiter    *rateLimiter
+	trustProxy bool
+}
+
+func New(options Options) http.Handler {
+	s := &Server{
+		store:      options.Store,
+		auth:       options.Auth,
+		identity:   options.Identity,
+		trustProxy: options.TrustProxy,
+	}
+	if options.RateLimit > 0 {
+		s.limiter = newRateLimiter(options.RateLimit, options.RateWindow)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /api/v1/channels/demo", s.demoChannel)
@@ -27,7 +50,20 @@ func New(st *store.Store, authenticator auth.Authenticator, origins []string) ht
 	mux.HandleFunc("GET /api/v1/videos/{id}", s.getVideo)
 	mux.HandleFunc("GET /api/v1/demo", s.demo)
 	mux.HandleFunc("GET /api/v1/me", s.me)
-	return withCORS(mux, origins)
+
+	if s.identity != nil {
+		mux.HandleFunc("POST /api/v1/auth/register", s.register)
+		mux.HandleFunc("POST /api/v1/auth/verify-email", s.verifyEmail)
+		mux.HandleFunc("POST /api/v1/auth/resend-verification", s.resendVerification)
+		mux.HandleFunc("POST /api/v1/auth/login", s.login)
+		mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
+		mux.HandleFunc("GET /api/v1/auth/session", s.session)
+		mux.HandleFunc("GET /api/v1/auth/csrf", s.csrf)
+		mux.HandleFunc("POST /api/v1/auth/forgot-password", s.forgotPassword)
+		mux.HandleFunc("POST /api/v1/auth/reset-password", s.resetPassword)
+	}
+
+	return withCORS(withCSRF(mux, s.identity), options.Origins)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +138,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, auth.ErrUnauthorized) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
-				"detail": "A valid dev actor token is required.",
+				"detail": "A valid session is required.",
 			})
 			return
 		}
@@ -138,8 +174,10 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if origin != "" && originAllowed(origin, origins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")

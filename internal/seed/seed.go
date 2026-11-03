@@ -2,8 +2,10 @@ package seed
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
@@ -11,7 +13,7 @@ var demoTime = time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 
 const demoContentHash = "sha256:4d1a52f8c6b6e1c0e6f0f3d3b4a0f6f0a8e0c2d4b6a8f0e2c4d6b8a0f2e4c6d8"
 
-func Run(ctx context.Context, st *store.Store, pipelineURL, webURL string) error {
+func Run(ctx context.Context, st *store.Store, pipelineURL, webURL, demoEmail, demoPassword string) error {
 	actor := store.Actor{
 		ID:          "usr_demo",
 		Type:        "person",
@@ -35,6 +37,26 @@ func Run(ctx context.Context, st *store.Store, pipelineURL, webURL string) error
 	}
 	if err := st.UpsertChannel(ctx, channel); err != nil {
 		return err
+	}
+
+	if demoEmail != "" && demoPassword != "" {
+		passwordHash, err := auth.HashPassword(demoPassword)
+		if err != nil {
+			return err
+		}
+		verifiedAt := demoTime
+		account := store.Account{
+			ID:              "acct_demo",
+			ActorID:         actor.ID,
+			Email:           strings.ToLower(strings.TrimSpace(demoEmail)),
+			PasswordHash:    passwordHash,
+			EmailVerifiedAt: &verifiedAt,
+			CreatedAt:       demoTime,
+			UpdatedAt:       demoTime,
+		}
+		if err := st.UpsertAccount(ctx, account); err != nil {
+			return err
+		}
 	}
 
 	playback := store.Playback{

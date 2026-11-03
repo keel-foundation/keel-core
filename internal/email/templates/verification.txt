@@ -1,0 +1,18 @@
+KeelTube
+
+Verify your email
+
+{{if .Name}}Hello {{.Name}},{{else}}Hello,{{end}}
+
+Use this code to verify the email address for your KeelTube account:
+
+{{.Code}}
+
+The code expires at {{.ExpiresAtText}} ({{.ExpiresInText}} from now).
+
+{{.FooterNote}}
+
+--
+KeelTube
+Creator-owned video with an even keel.
+This is a transactional message about your account.

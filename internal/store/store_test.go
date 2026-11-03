@@ -15,7 +15,7 @@ func TestSeedAndReadBack(t *testing.T) {
 	st := store.New(conn)
 	ctx := context.Background()
 
-	if err := seed.Run(ctx, st, "http://localhost:8081", "http://localhost:3000"); err != nil {
+	if err := seed.Run(ctx, st, "http://localhost:8081", "http://localhost:3000", "", ""); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
