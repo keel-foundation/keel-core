@@ -29,6 +29,10 @@ type Channel struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	AvatarURL   string    `json:"avatar_url,omitempty"`
+	Subscribers int64     `json:"subscribers"`
+	Verified    bool      `json:"verified"`
+	VideoCount  int64     `json:"video_count"`
+	TotalViews  int64     `json:"total_views"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -57,6 +61,12 @@ type Video struct {
 	Playback        Playback   `json:"playback"`
 	License         string     `json:"license"`
 	Policy          *Policy    `json:"policy,omitempty"`
+	Format          string     `json:"format"`
+	Category        string     `json:"category"`
+	Tags            []string   `json:"tags"`
+	Views           int64      `json:"views"`
+	Likes           int64      `json:"likes"`
+	CommentsCount   int64      `json:"comments_count"`
 	CreatedAt       time.Time  `json:"created_at"`
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -95,16 +105,11 @@ func (s *Store) GetActor(ctx context.Context, id string) (Actor, error) {
 }
 
 func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, actor_id, handle, name, description, avatar_url, created_at, updated_at
-		FROM channels
-		WHERE id = $1
-	`, id)
-	var channel Channel
-	err := row.Scan(
-		&channel.ID, &channel.ActorID, &channel.Handle, &channel.Name, &channel.Description,
-		&channel.AvatarURL, &channel.CreatedAt, &channel.UpdatedAt,
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+channelColumns+`, `+channelStatsColumns+` FROM channels WHERE id = $1`,
+		id,
 	)
+	channel, err := scanChannelWithStats(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
 	}
@@ -115,39 +120,13 @@ func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
 }
 
 func (s *Store) GetVideo(ctx context.Context, id string) (Video, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, channel_id, title, description, status, visibility, content_hash,
-		       duration_seconds, playback, license, policy, created_at, published_at, updated_at
-		FROM videos
-		WHERE id = $1
-	`, id)
-	var video Video
-	var playbackJSON []byte
-	var policyJSON []byte
-	var publishedAt sql.NullTime
-	err := row.Scan(
-		&video.ID, &video.ChannelID, &video.Title, &video.Description, &video.Status,
-		&video.Visibility, &video.ContentHash, &video.DurationSeconds, &playbackJSON,
-		&video.License, &policyJSON, &video.CreatedAt, &publishedAt, &video.UpdatedAt,
-	)
+	row := s.db.QueryRowContext(ctx, `SELECT `+videoColumns+` FROM videos WHERE id = $1`, id)
+	video, err := scanVideo(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Video{}, ErrNotFound
 	}
 	if err != nil {
 		return Video{}, err
-	}
-	if err := json.Unmarshal(playbackJSON, &video.Playback); err != nil {
-		return Video{}, err
-	}
-	if len(policyJSON) > 0 {
-		var policy Policy
-		if err := json.Unmarshal(policyJSON, &policy); err != nil {
-			return Video{}, err
-		}
-		video.Policy = &policy
-	}
-	if publishedAt.Valid {
-		video.PublishedAt = &publishedAt.Time
 	}
 	return video, nil
 }
@@ -172,17 +151,23 @@ func (s *Store) UpsertActor(ctx context.Context, actor Actor) error {
 
 func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO channels (id, actor_id, handle, name, description, avatar_url, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO channels (
+			id, actor_id, handle, name, description, avatar_url, subscribers, verified,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
 			actor_id = EXCLUDED.actor_id,
 			handle = EXCLUDED.handle,
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			avatar_url = EXCLUDED.avatar_url,
+			subscribers = EXCLUDED.subscribers,
+			verified = EXCLUDED.verified,
 			updated_at = EXCLUDED.updated_at
 	`, channel.ID, channel.ActorID, channel.Handle, channel.Name, channel.Description,
-		channel.AvatarURL, channel.CreatedAt, channel.UpdatedAt,
+		channel.AvatarURL, channel.Subscribers, channel.Verified, channel.CreatedAt,
+		channel.UpdatedAt,
 	)
 	return err
 }
@@ -202,6 +187,15 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 		policy = body
 	}
 
+	tags := video.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+
 	var publishedAt any
 	if video.PublishedAt != nil {
 		publishedAt = *video.PublishedAt
@@ -210,9 +204,10 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO videos (
 			id, channel_id, title, description, status, visibility, content_hash,
-			duration_seconds, playback, license, policy, created_at, published_at, updated_at
+			duration_seconds, playback, license, policy, format, category, tags,
+			views, likes, comments_count, created_at, published_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (id) DO UPDATE SET
 			channel_id = EXCLUDED.channel_id,
 			title = EXCLUDED.title,
@@ -224,11 +219,18 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 			playback = EXCLUDED.playback,
 			license = EXCLUDED.license,
 			policy = EXCLUDED.policy,
+			format = EXCLUDED.format,
+			category = EXCLUDED.category,
+			tags = EXCLUDED.tags,
+			views = EXCLUDED.views,
+			likes = EXCLUDED.likes,
+			comments_count = EXCLUDED.comments_count,
 			published_at = EXCLUDED.published_at,
 			updated_at = EXCLUDED.updated_at
 	`, video.ID, video.ChannelID, video.Title, video.Description, video.Status,
 		video.Visibility, video.ContentHash, video.DurationSeconds, playback, video.License,
-		policy, video.CreatedAt, publishedAt, video.UpdatedAt,
+		policy, video.Format, video.Category, tagsJSON, video.Views, video.Likes,
+		video.CommentsCount, video.CreatedAt, publishedAt, video.UpdatedAt,
 	)
 	return err
 }

@@ -156,18 +156,11 @@ func scanAccount(row *sql.Row) (Account, error) {
 }
 
 func (s *Store) GetChannelByActorID(ctx context.Context, actorID string) (Channel, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, actor_id, handle, name, description, avatar_url, created_at, updated_at
-		FROM channels
-		WHERE actor_id = $1
-		ORDER BY created_at ASC
-		LIMIT 1
-	`, actorID)
-	var channel Channel
-	err := row.Scan(
-		&channel.ID, &channel.ActorID, &channel.Handle, &channel.Name, &channel.Description,
-		&channel.AvatarURL, &channel.CreatedAt, &channel.UpdatedAt,
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+channelColumns+`, `+channelStatsColumns+` FROM channels WHERE actor_id = $1 ORDER BY created_at ASC LIMIT 1`,
+		actorID,
 	)
+	channel, err := scanChannelWithStats(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
 	}

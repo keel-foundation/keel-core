@@ -34,6 +34,12 @@ func TestSeedAndReadBack(t *testing.T) {
 	if channel.ActorID != actor.ID || channel.Name != "Mara Vale" {
 		t.Fatalf("unexpected channel: %+v", channel)
 	}
+	if channel.Subscribers != 2_400_000 || !channel.Verified {
+		t.Fatalf("unexpected channel catalog fields: %+v", channel)
+	}
+	if channel.VideoCount != 1 || channel.TotalViews != 1_842_000 {
+		t.Fatalf("unexpected channel stats: %+v", channel)
+	}
 
 	video, err := st.GetVideo(ctx, "vid_demo_001")
 	if err != nil {
@@ -41,6 +47,15 @@ func TestSeedAndReadBack(t *testing.T) {
 	}
 	if video.Title != "The Last Lighthouse" || video.Status != "published" {
 		t.Fatalf("unexpected video: %+v", video)
+	}
+	if video.Format != "video" || video.Category != "Documentaries" {
+		t.Fatalf("unexpected video catalog fields: %+v", video)
+	}
+	if len(video.Tags) != 3 || video.Tags[0] != "documentary" {
+		t.Fatalf("unexpected video tags: %+v", video.Tags)
+	}
+	if video.Views != 1_842_000 || video.Likes != 182_400 || video.CommentsCount != 1_284 {
+		t.Fatalf("unexpected video counters: %+v", video)
 	}
 	if video.Playback.MP4URL != "http://localhost:8081/demo/sample.mp4" {
 		t.Fatalf("unexpected playback: %+v", video.Playback)

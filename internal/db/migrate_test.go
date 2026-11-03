@@ -38,6 +38,33 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 		}
 	}
 
+	for _, column := range []struct {
+		table string
+		name  string
+	}{
+		{"channels", "subscribers"},
+		{"channels", "verified"},
+		{"videos", "format"},
+		{"videos", "category"},
+		{"videos", "tags"},
+		{"videos", "views"},
+		{"videos", "likes"},
+		{"videos", "comments_count"},
+	} {
+		var exists bool
+		if err := conn.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+			)
+		`, column.table, column.name).Scan(&exists); err != nil {
+			t.Fatalf("check column %s.%s: %v", column.table, column.name, err)
+		}
+		if !exists {
+			t.Fatalf("column %s.%s is missing", column.table, column.name)
+		}
+	}
+
 	if err := db.Migrate(ctx, conn); err != nil {
 		t.Fatalf("second migration run: %v", err)
 	}

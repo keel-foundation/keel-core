@@ -44,10 +44,18 @@ func New(options Options) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
-	mux.HandleFunc("GET /api/v1/channels/demo", s.demoChannel)
-	mux.HandleFunc("GET /api/v1/channels/{id}", s.getChannel)
+	mux.HandleFunc("GET /api/v1/feed", s.feed)
+	mux.HandleFunc("GET /api/v1/explore", s.explore)
+	mux.HandleFunc("GET /api/v1/videos", s.listVideos)
 	mux.HandleFunc("GET /api/v1/videos/demo", s.demoVideo)
 	mux.HandleFunc("GET /api/v1/videos/{id}", s.getVideo)
+	mux.HandleFunc("GET /api/v1/videos/{id}/related", s.relatedVideos)
+	mux.HandleFunc("GET /api/v1/shorts", s.shorts)
+	mux.HandleFunc("GET /api/v1/search", s.search)
+	mux.HandleFunc("GET /api/v1/categories", s.categories)
+	mux.HandleFunc("GET /api/v1/channels/demo", s.demoChannel)
+	mux.HandleFunc("GET /api/v1/channels/{id}", s.getChannel)
+	mux.HandleFunc("GET /api/v1/channels/{id}/videos", s.channelVideos)
 	mux.HandleFunc("GET /api/v1/demo", s.demo)
 	mux.HandleFunc("GET /api/v1/me", s.me)
 
@@ -104,7 +112,15 @@ func (s *Server) demoVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
-	s.writeVideo(w, r, r.PathValue("id"))
+	video, err := s.store.GetVideo(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if !s.ensureVideoAccess(w, r, video) {
+		return
+	}
+	writeJSON(w, http.StatusOK, video)
 }
 
 func (s *Server) writeVideo(w http.ResponseWriter, r *http.Request, id string) {

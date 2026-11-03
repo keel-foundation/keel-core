@@ -48,5 +48,5 @@ func main() {
 	if err := seed.Run(ctx, store.New(conn), pipelineURL, webURL, demoEmail, demoPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
-	log.Printf("seeded demo actor, channel, and videos")
+	log.Printf("seeded catalog fixtures and demo actor")
 }

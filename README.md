@@ -4,8 +4,9 @@ The core API service: identity, channels, videos, subscriptions, comments, searc
 moderation-facing domain model.
 
 **Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
-in PostgreSQL. Email/password registration, email verification, login, logout, and password reset
-are implemented. Social providers and full OIDC are not implemented yet.
+in PostgreSQL. Email/password registration, email verification, login, logout, password reset, and
+the public catalog and discovery endpoints are implemented. Social providers and full OIDC are not
+implemented yet.
 
 ## Configuration
 
@@ -96,10 +97,18 @@ These values are compiled into the service and are not environment settings:
 | `GET` | `/api/v1/auth/csrf` | Rotate the CSRF cookie |
 | `POST` | `/api/v1/auth/forgot-password` | Send a password-reset link |
 | `POST` | `/api/v1/auth/reset-password` | Set a new password with a reset token |
+| `GET` | `/api/v1/feed` | Public home feed, video format, latest first |
+| `GET` | `/api/v1/explore` | Featured, new, trending, and curated collections |
+| `GET` | `/api/v1/videos` | Public video list with filters and sorting |
+| `GET` | `/api/v1/videos/{id}` | Video by id with visibility checks |
+| `GET` | `/api/v1/videos/{id}/related` | Related public videos |
+| `GET` | `/api/v1/shorts` | Public short-format videos |
+| `GET` | `/api/v1/search` | Search public videos and channels |
+| `GET` | `/api/v1/categories` | Catalog categories and public video counts |
 | `GET` | `/api/v1/channels/demo` | Demo channel (`ch_demo`) |
 | `GET` | `/api/v1/channels/{id}` | Channel by id |
+| `GET` | `/api/v1/channels/{id}/videos` | Public videos for a channel |
 | `GET` | `/api/v1/videos/demo` | Demo video (`vid_demo_001`) |
-| `GET` | `/api/v1/videos/{id}` | Video by id |
 | `GET` | `/api/v1/demo` | Demo video and channel |
 | `GET` | `/api/v1/me` | Current session or dev principal |
 
@@ -110,6 +119,21 @@ session token as `Authorization: Bearer <token>` instead of cookies.
 `/api/v1/me` uses the session authenticator. The fixed dev principal is only available when
 `KEELTUBE_AUTH_ALLOW_DEV` is enabled or `KEELTUBE_DEV_ACTOR_TOKEN` is set. This is not production
 authentication.
+
+### Catalog responses
+
+List endpoints return
+`{ "items": [...], "limit": 20, "offset": 0, "total": 42, "has_more": true }`. Search returns
+`{ "videos": <page>, "channels": <page> }`. Explore returns
+`{ "featured": <video|null>, "new": <page>, "trending": <page>, "collections": [...] }`.
+
+Public lists only include `published` or `demonetized` videos with `public` visibility.
+`GET /videos/{id}` returns `410` for removed videos and `404` for private, draft, or processing
+videos unless the request is authenticated as the owning channel. Unlisted videos are accessible by
+id.
+
+The catalog adds `format`, `category`, `tags`, `views`, `likes`, `comments_count`, `subscribers`,
+`verified`, `video_count`, and `total_views` on top of the `keel-spec` video and channel shapes.
 
 ## Run locally
 
@@ -125,8 +149,9 @@ go run ./cmd/api
 This standalone workflow is optional. The maintainer devstack uses
 `keel-infra/devstack/.env` and passes it to the containers.
 
-The seed is idempotent. It creates the demo actor, channel, and video fixtures. The demo account is
-only created when both `KEELTUBE_SEED_DEMO_EMAIL` and `KEELTUBE_SEED_DEMO_PASSWORD` are set.
+The seed is idempotent. It creates the demo actor, channel, and video fixtures plus the catalog
+channels and videos used by discovery. The demo account is only created when both
+`KEELTUBE_SEED_DEMO_EMAIL` and `KEELTUBE_SEED_DEMO_PASSWORD` are set.
 
 ## Tests
 
@@ -148,7 +173,7 @@ the database and mail settings through the stack's environment file.
 
 ## Next
 
-1. Add subscriptions, comments, search, and upload-session endpoints.
+1. Add subscriptions, comments, and creator studio endpoints.
 2. Replace the dev fallback with full OIDC behind the same authenticator interface.
 3. Connect approved Google, Apple, and X providers.
 4. Add per-creator scoping to the moderation client contract.
