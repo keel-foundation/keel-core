@@ -23,6 +23,8 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 	for _, table := range []string{
 		"actors", "channels", "videos",
 		"accounts", "sessions", "email_verifications", "password_resets", "auth_events",
+		"subscriptions", "video_reactions", "saved_videos", "watch_history",
+		"comments", "comment_likes", "video_embeddings", "actor_embeddings",
 	} {
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `

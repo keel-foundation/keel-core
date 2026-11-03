@@ -12,6 +12,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/config"
 	"github.com/keel-foundation/keel-core/internal/db"
+	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/mailer"
 	"github.com/keel-foundation/keel-core/internal/store"
@@ -77,6 +78,11 @@ func main() {
 
 	st := store.New(conn)
 	identityService := identity.New(st, mailerClient, identityConfig())
+	discoveryEngine := discovery.NewEngine(
+		st,
+		discovery.EmbedderFromEnv(os.Getenv),
+		discovery.DefaultConfig(),
+	)
 
 	devAuthenticator := auth.NewDev(
 		config.EnvOrDefault("KEELTUBE_DEV_ACTOR_ID", "usr_demo"),
@@ -95,6 +101,7 @@ func main() {
 			Store:      st,
 			Auth:       authenticator,
 			Identity:   identityService,
+			Discovery:  discoveryEngine,
 			Origins:    allowedOrigins(),
 			RateLimit:  authRateLimit,
 			RateWindow: authRateWindow,

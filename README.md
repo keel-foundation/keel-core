@@ -4,8 +4,9 @@ The core API service: identity, channels, videos, subscriptions, comments, searc
 moderation-facing domain model.
 
 **Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
-in PostgreSQL. Email/password registration, email verification, login, logout, password reset, and
-the public catalog and discovery endpoints are implemented. Social providers and full OIDC are not
+in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
+public catalog and discovery endpoints, and viewer engagement (subscriptions, reactions, saves,
+watch history, comments, and replies) are implemented. Social providers and full OIDC are not
 implemented yet.
 
 ## Configuration
@@ -31,6 +32,11 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_AUTH_ALLOW_DEV` | enabled when the dev token is set | Allow the fixed dev principal |
 | `KEELTUBE_PIPELINE_PUBLIC_URL` | `http://localhost:8081` | Playback base URL used by the seed |
 | `KEELTUBE_WEB_PUBLIC_URL` | `http://localhost:3000` | Captions base URL used by the seed |
+| `KEELTUBE_EMBEDDINGS_URL` | unset | `keel-embeddings` base URL; unset uses the in-process hash embedder |
+| `KEELTUBE_EMBEDDINGS_TOKEN` | unset | Bearer token for `keel-embeddings`; must match the service |
+| `KEELTUBE_EMBEDDINGS_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model id |
+| `KEELTUBE_EMBEDDINGS_DIMENSIONS` | `384` | Embedding dimensions; must match the pgvector column |
+| `KEELTUBE_EMBEDDINGS_TIMEOUT_SECONDS` | `30` | Embeddings request timeout |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -97,17 +103,69 @@ go test -p 1 ./...
 The CI workflow starts a PostgreSQL service automatically. Without the environment variable, the
 database tests skip.
 
+## Discovery
+
+`GET /api/v1/feed` personalizes when the request carries a session and the viewer has signals.
+`GET /api/v1/explore` returns personalized sections with reasons for the same viewers. Anonymous
+and new viewers get a trending, latest, and category-diverse cold-start feed plus the editorial
+Explore collections.
+
+Signals are watch history, likes, saves, and subscriptions. The engine stores video and actor
+embeddings in PostgreSQL using `pgvector` (`vector(384)`), ranks candidates with cosine similarity,
+subscription and category affinity, popularity, recency, and a small recently-watched penalty, and
+applies channel/category diversity. Curated sections include Recently watched, Because you
+watched/liked/saved X, More in a category, and New from your subscriptions.
+
+Video embeddings are refreshed by the seed and lazily before discovery requests. Actor embeddings
+are cached and invalidated when the viewer watches, reacts, saves, subscribes, or unsubscribes. If
+`keel-embeddings` is unavailable, discovery falls back to the cold-start feed and editorial Explore.
+Leave `KEELTUBE_EMBEDDINGS_URL` unset to use the deterministic hash embedder for local development.
+The PostgreSQL image must provide the `vector` extension; changing the model dimension requires a
+matching migration.
+
 ## Docker
 
-The private dev stack builds and runs core, the seed, pipeline, moderation, and PostgreSQL. Supply
-the database and mail settings through the stack's environment file.
+The private dev stack builds and runs core, the seed, embeddings, pipeline, moderation, and
+PostgreSQL. Supply the database and mail settings through the stack's environment file.
+
+## Engagement
+
+Authenticated viewer state is stored in PostgreSQL and scoped to the session principal. These
+endpoints require CSRF validation when the request uses a session cookie. Public comment reads
+remain available to anonymous viewers.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/channels/{id}/subscription` | Read the current subscription state |
+| `POST` | `/api/v1/channels/{id}/subscription` | Subscribe to a channel |
+| `DELETE` | `/api/v1/channels/{id}/subscription` | Unsubscribe from a channel |
+| `GET` | `/api/v1/me/subscriptions` | List subscribed channels |
+| `GET` | `/api/v1/me/feed` | List public videos from subscribed channels |
+| `GET` | `/api/v1/videos/{id}/reaction` | Read the current reaction and like count |
+| `PUT` | `/api/v1/videos/{id}/reaction` | Set a `like` or `dislike` reaction |
+| `DELETE` | `/api/v1/videos/{id}/reaction` | Clear the current reaction |
+| `GET` | `/api/v1/videos/{id}/save` | Read the saved state |
+| `PUT` | `/api/v1/videos/{id}/save` | Save a video |
+| `DELETE` | `/api/v1/videos/{id}/save` | Remove a saved video |
+| `POST` | `/api/v1/videos/{id}/view` | Record a view and update watch history |
+| `GET` | `/api/v1/me/library?tab=saved\|liked\|history` | Read the personal library |
+| `DELETE` | `/api/v1/me/history` | Clear watch history |
+| `GET` | `/api/v1/videos/{id}/comments` | List visible comments and replies |
+| `POST` | `/api/v1/videos/{id}/comments` | Post a comment or one-level reply |
+| `POST` | `/api/v1/comments/{id}/like` | Like a comment |
+| `DELETE` | `/api/v1/comments/{id}/like` | Remove a comment like |
+
+`POST /api/v1/videos/{id}/view` records watch history and increments the public view counter for
+each authenticated request. Time-window view deduplication is future work.
 
 ## Next
 
-1. Add subscriptions, comments, and creator studio endpoints.
+1. Add creator studio write endpoints (metadata updates, status and visibility, versions) and an
+   upload handshake.
 2. Replace the dev fallback with full OIDC behind the same authenticator interface.
 3. Connect approved Google, Apple, and X providers.
 4. Add per-creator scoping to the moderation client contract.
+5. Add report ingestion to the moderation service, not core.
 
 ## Licensing
 

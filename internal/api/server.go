@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
@@ -17,6 +18,7 @@ type Options struct {
 	Store      *store.Store
 	Auth       auth.Authenticator
 	Identity   *identity.Service
+	Discovery  *discovery.Engine
 	Origins    []string
 	RateLimit  int
 	RateWindow time.Duration
@@ -27,15 +29,25 @@ type Server struct {
 	store      *store.Store
 	auth       auth.Authenticator
 	identity   *identity.Service
+	discovery  *discovery.Engine
 	limiter    *rateLimiter
 	trustProxy bool
 }
 
 func New(options Options) http.Handler {
+	discoveryEngine := options.Discovery
+	if discoveryEngine == nil && options.Store != nil {
+		discoveryEngine = discovery.NewEngine(
+			options.Store,
+			discovery.NewHashEmbedder(discovery.DefaultDimensions),
+			discovery.DefaultConfig(),
+		)
+	}
 	s := &Server{
 		store:      options.Store,
 		auth:       options.Auth,
 		identity:   options.Identity,
+		discovery:  discoveryEngine,
 		trustProxy: options.TrustProxy,
 	}
 	if options.RateLimit > 0 {
@@ -58,6 +70,29 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/channels/{id}/videos", s.channelVideos)
 	mux.HandleFunc("GET /api/v1/demo", s.demo)
 	mux.HandleFunc("GET /api/v1/me", s.me)
+
+	mux.HandleFunc("GET /api/v1/channels/{id}/subscription", s.getSubscription)
+	mux.HandleFunc("POST /api/v1/channels/{id}/subscription", s.subscribe)
+	mux.HandleFunc("DELETE /api/v1/channels/{id}/subscription", s.unsubscribe)
+	mux.HandleFunc("GET /api/v1/me/subscriptions", s.listSubscriptions)
+	mux.HandleFunc("GET /api/v1/me/feed", s.subscriptionFeed)
+	mux.HandleFunc("GET /api/v1/me/library", s.library)
+	mux.HandleFunc("DELETE /api/v1/me/history", s.clearHistory)
+
+	mux.HandleFunc("GET /api/v1/videos/{id}/reaction", s.getReaction)
+	mux.HandleFunc("PUT /api/v1/videos/{id}/reaction", s.setReaction)
+	mux.HandleFunc("DELETE /api/v1/videos/{id}/reaction", s.clearReaction)
+
+	mux.HandleFunc("GET /api/v1/videos/{id}/save", s.getSave)
+	mux.HandleFunc("PUT /api/v1/videos/{id}/save", s.saveVideo)
+	mux.HandleFunc("DELETE /api/v1/videos/{id}/save", s.unsaveVideo)
+
+	mux.HandleFunc("POST /api/v1/videos/{id}/view", s.recordView)
+
+	mux.HandleFunc("GET /api/v1/videos/{id}/comments", s.listComments)
+	mux.HandleFunc("POST /api/v1/videos/{id}/comments", s.createComment)
+	mux.HandleFunc("POST /api/v1/comments/{id}/like", s.likeComment)
+	mux.HandleFunc("DELETE /api/v1/comments/{id}/like", s.unlikeComment)
 
 	if s.identity != nil {
 		mux.HandleFunc("POST /api/v1/auth/register", s.register)
@@ -198,7 +233,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if origin != "" && originAllowed(origin, origins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "600")

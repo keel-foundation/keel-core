@@ -17,6 +17,7 @@ var (
 
 const (
 	videoColumns        = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
+	videoColumnsV       = `v.id, v.public_id, v.channel_id, v.title, v.description, v.status, v.visibility, v.content_hash, v.duration_seconds, v.playback, v.license, v.policy, v.format, v.category, v.tags, v.views, v.likes, v.comments_count, v.created_at, v.published_at, v.updated_at`
 	channelColumns      = `id, actor_id, handle, name, description, avatar_url, subscribers, verified, created_at, updated_at`
 	channelStatsColumns = `(SELECT COUNT(*) FROM videos v
 		WHERE v.channel_id = channels.id
@@ -29,13 +30,14 @@ const (
 )
 
 type VideoFilter struct {
-	ChannelID  string
-	Categories []string
-	Format     string
-	Sort       string
-	Limit      int
-	Offset     int
-	PublicOnly bool
+	ChannelID    string
+	Categories   []string
+	Format       string
+	Sort         string
+	Limit        int
+	Offset       int
+	PublicOnly   bool
+	SubscribedBy string
 }
 
 type CategoryCount struct {
@@ -107,6 +109,13 @@ func (s *Store) ListVideos(ctx context.Context, filter VideoFilter) ([]Video, in
 	args := make([]any, 0, 6)
 	if filter.PublicOnly {
 		clauses = append(clauses, "v.status IN ('published', 'demonetized')", "v.visibility = 'public'")
+	}
+	if filter.SubscribedBy != "" {
+		args = append(args, filter.SubscribedBy)
+		clauses = append(clauses, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM subscriptions s WHERE s.channel_id = v.channel_id AND s.actor_id = $%d)",
+			len(args),
+		))
 	}
 	if filter.ChannelID != "" {
 		args = append(args, filter.ChannelID)

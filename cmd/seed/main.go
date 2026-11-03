@@ -9,6 +9,7 @@ import (
 
 	"github.com/keel-foundation/keel-core/internal/config"
 	"github.com/keel-foundation/keel-core/internal/db"
+	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/seed"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
@@ -45,8 +46,21 @@ func main() {
 	if err := db.Migrate(ctx, conn); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
-	if err := seed.Run(ctx, store.New(conn), pipelineURL, webURL, demoEmail, demoPassword); err != nil {
+	st := store.New(conn)
+	if err := seed.Run(ctx, st, pipelineURL, webURL, demoEmail, demoPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
+
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer refreshCancel()
+	engine := discovery.NewEngine(
+		st,
+		discovery.EmbedderFromEnv(os.Getenv),
+		discovery.DefaultConfig(),
+	)
+	if err := engine.RefreshAllVideos(refreshCtx); err != nil {
+		log.Printf("refresh embeddings: %v", err)
+	}
+
 	log.Printf("seeded catalog fixtures and demo actor")
 }

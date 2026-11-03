@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
 
@@ -79,17 +80,18 @@ type searchResponse struct {
 }
 
 type exploreCollection struct {
-	ID          string            `json:"id"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	Videos      page[store.Video] `json:"videos"`
+	ID          string                           `json:"id"`
+	Title       string                           `json:"title"`
+	Description string                           `json:"description"`
+	Reason      *discovery.Reason                `json:"reason,omitempty"`
+	Videos      page[discovery.RecommendedVideo] `json:"videos"`
 }
 
 type exploreResponse struct {
-	Featured    *store.Video        `json:"featured"`
-	New         page[store.Video]   `json:"new"`
-	Trending    page[store.Video]   `json:"trending"`
-	Collections []exploreCollection `json:"collections"`
+	Featured    *discovery.RecommendedVideo      `json:"featured"`
+	New         page[discovery.RecommendedVideo] `json:"new"`
+	Trending    page[discovery.RecommendedVideo] `json:"trending"`
+	Collections []exploreCollection              `json:"collections"`
 }
 
 type categoryResponse struct {
@@ -109,6 +111,44 @@ type validationError struct {
 func (e *validationError) Error() string { return e.Message }
 
 func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
+	filter, err := parseVideoFilter(r, "latest", "video", "", "")
+	if err != nil {
+		writeCatalogError(w, err)
+		return
+	}
+	requestedSort := strings.TrimSpace(r.URL.Query().Get("sort"))
+	if s.discovery != nil && (requestedSort == "" || requestedSort == "latest") {
+		actorID := ""
+		if principal, ok := s.optionalPrincipal(r); ok {
+			actorID = principal.ID
+		}
+		category := ""
+		if len(filter.Categories) > 0 {
+			category = filter.Categories[0]
+		}
+		result, err := s.discovery.Feed(
+			r.Context(), actorID, filter.Limit, filter.Offset, filter.Format, category,
+		)
+		if err == nil {
+			if result.Personalized {
+				setPrivateCache(w)
+			} else {
+				setPublicCache(w)
+			}
+			writeJSON(w, http.StatusOK, newPage(result.Items, filter.Limit, filter.Offset, result.Total))
+			return
+		}
+		log.Printf("discovery feed failed: %v", err)
+		cold, coldErr := s.discovery.Feed(
+			r.Context(), "", filter.Limit, filter.Offset, filter.Format, category,
+		)
+		if coldErr == nil {
+			setPublicCache(w)
+			writeJSON(w, http.StatusOK, newPage(cold.Items, filter.Limit, filter.Offset, cold.Total))
+			return
+		}
+		log.Printf("discovery cold start failed: %v", coldErr)
+	}
 	s.writeVideoList(w, r, "latest", "video", "", "")
 }
 
@@ -224,6 +264,22 @@ func (s *Server) explore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.discovery != nil {
+		if principal, ok := s.optionalPrincipal(r); ok && principal.ID != "" {
+			result, err := s.discovery.Explore(
+				r.Context(), principal.ID, limit, collectionLimit,
+			)
+			if err == nil && result.Personalized {
+				setPrivateCache(w)
+				writeJSON(w, http.StatusOK, personalizedExploreResponse(result, limit, collectionLimit))
+				return
+			}
+			if err != nil {
+				log.Printf("discovery explore failed: %v", err)
+			}
+		}
+	}
+
 	newVideos, newTotal, err := s.store.ListVideos(r.Context(), store.VideoFilter{
 		Sort:       "latest",
 		Limit:      limit,
@@ -243,11 +299,11 @@ func (s *Server) explore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var featured *store.Video
+	var featured *discovery.RecommendedVideo
 	if len(trending) > 0 {
-		featured = &trending[0]
+		featured = &discovery.RecommendedVideo{Video: trending[0]}
 	} else if len(newVideos) > 0 {
-		featured = &newVideos[0]
+		featured = &discovery.RecommendedVideo{Video: newVideos[0]}
 	}
 
 	collections := make([]exploreCollection, 0, len(exploreCollectionDefs))
@@ -269,17 +325,45 @@ func (s *Server) explore(w http.ResponseWriter, r *http.Request) {
 			ID:          def.ID,
 			Title:       def.Title,
 			Description: def.Description,
-			Videos:      newPage(videos, collectionLimit, 0, total),
+			Videos:      newPage(recommendedVideos(videos), collectionLimit, 0, total),
 		})
 	}
 
 	setPublicCache(w)
 	writeJSON(w, http.StatusOK, exploreResponse{
 		Featured:    featured,
-		New:         newPage(newVideos, limit, 0, newTotal),
-		Trending:    newPage(trending, limit, 0, trendingTotal),
+		New:         newPage(recommendedVideos(newVideos), limit, 0, newTotal),
+		Trending:    newPage(recommendedVideos(trending), limit, 0, trendingTotal),
 		Collections: collections,
 	})
+}
+
+func personalizedExploreResponse(
+	result discovery.ExploreResult,
+	limit, collectionLimit int,
+) exploreResponse {
+	response := exploreResponse{Featured: result.Featured}
+	response.New = newPage(result.New, limit, 0, len(result.New))
+	response.Trending = newPage(result.Trending, limit, 0, len(result.Trending))
+	response.Collections = make([]exploreCollection, 0, len(result.Collections))
+	for _, collection := range result.Collections {
+		response.Collections = append(response.Collections, exploreCollection{
+			ID:          collection.ID,
+			Title:       collection.Title,
+			Description: collection.Description,
+			Reason:      collection.Reason,
+			Videos:      newPage(collection.Videos, collectionLimit, 0, len(collection.Videos)),
+		})
+	}
+	return response
+}
+
+func recommendedVideos(videos []store.Video) []discovery.RecommendedVideo {
+	result := make([]discovery.RecommendedVideo, len(videos))
+	for index, video := range videos {
+		result[index] = discovery.RecommendedVideo{Video: video}
+	}
+	return result
 }
 
 func (s *Server) relatedVideos(w http.ResponseWriter, r *http.Request) {
