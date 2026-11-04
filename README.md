@@ -3,12 +3,17 @@
 The core API service: identity, channels, videos, subscriptions, comments, search, and the
 moderation-facing domain model.
 
-**Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
-in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
-public catalog and discovery endpoints, viewer engagement (subscriptions, reactions, saves, watch
-history, comments, and replies), the creator studio/media engine, watch telemetry/creator analytics,
-and the session-authenticated creator moderation gateway are implemented. Social OIDC/OAuth
-sign-in for Google, Apple, and X, including account linking and PKCE, is implemented.
+**Status:** UAT-ready, PostgreSQL-backed API. Actors, channels, videos, accounts, and sessions are
+stored in PostgreSQL. Email/password registration, email verification, login, logout, password
+reset, the public catalog and discovery endpoints, viewer engagement (subscriptions, reactions,
+saves, watch history, comments, and replies), the creator studio/media engine, watch
+telemetry/creator analytics, notifications, viewer reports/trust records, playlists, ActivityPub
+federation, and the session-authenticated creator moderation gateway are implemented. Social
+OIDC/OAuth sign-in for Google, Apple, and X, including account linking and PKCE, is implemented.
+
+`gofmt -l .`, `go vet ./...`, and `go test -p 1 ./...` pass against PostgreSQL + pgvector. The
+remaining UAT integration work is the `keel-web` data adapter; production classifier models,
+externally anchored moderation ledgers, and real billing/payout execution are future work.
 
 ## Configuration
 
@@ -44,6 +49,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_S3_ENDPOINT` | unset | S3-compatible endpoint for MinIO/R2 |
 | `KEELTUBE_MEDIA_S3_ACCESS_KEY_ID` | unset | Optional static S3 access key |
 | `KEELTUBE_MEDIA_S3_SECRET_ACCESS_KEY` | unset | Optional static S3 secret |
+| `KEELTUBE_MEDIA_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials |
 | `KEELTUBE_MEDIA_S3_USE_PATH_STYLE` | endpoint-dependent | Use path-style bucket addressing |
 | `KEELTUBE_MEDIA_S3_PREFIX` | `media` | Object key prefix |
 | `KEELTUBE_MEDIA_PUBLIC_URL` | `http://localhost:8080` | Base URL used in playback links |
@@ -71,6 +77,9 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_SCANNER_TOKEN` | unset | Bearer token for the external scanner |
 | `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
 | `KEELTUBE_RERANKER_URL` | unset | Optional cross-encoder reranker for semantic search; unset uses the lexical reranker |
+| `KEELTUBE_RERANKER_TOKEN` | unset | Optional bearer token for the reranker |
+| `KEELTUBE_RERANKER_MODEL` | unset | Optional reranker model identifier |
+| `KEELTUBE_RERANKER_TIMEOUT_SECONDS` | `5` | Reranker request timeout |
 | `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
 | `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for the internal notification-ingest endpoint; unset disables the route |
 | `KEELTUBE_MODERATION_URL` | unset | `keel-moderation` base URL; unset returns 503 from the creator moderation gateway |
@@ -570,9 +579,10 @@ Provider errors are not treated as approval; the job retries and eventually fail
 
 ## Next
 
-1. Add direct OIDC token forwarding for non-core moderation clients.
-2. Add server-signed creator export bundles and monetization/payout integration.
-3. Add production classifier models and public transparency aggregates.
+1. Wire the `keel-web` data adapters through its Cloudflare Worker BFF.
+2. Add direct OIDC token forwarding for non-core moderation clients.
+3. Add server-signed creator export bundles and monetization/payout integration.
+4. Add production classifier models and public transparency aggregates.
 
 ## Licensing
 
