@@ -6,8 +6,9 @@ moderation-facing domain model.
 **Status:** PostgreSQL-backed demo API. Actors, channels, videos, accounts, and sessions are stored
 in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
 public catalog and discovery endpoints, viewer engagement (subscriptions, reactions, saves, watch
-history, comments, and replies), the creator studio/media engine, and watch telemetry/creator
-analytics are implemented. Social providers and full OIDC are not implemented yet.
+history, comments, and replies), the creator studio/media engine, watch telemetry/creator analytics,
+and the session-authenticated creator moderation gateway are implemented. Social providers and full
+OIDC are not implemented yet.
 
 ## Configuration
 
@@ -71,6 +72,13 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
 | `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
 | `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for the internal notification-ingest endpoint; unset disables the route |
+| `KEELTUBE_MODERATION_URL` | unset | `keel-moderation` base URL; unset returns 503 from the creator moderation gateway |
+| `KEELTUBE_MODERATION_TOKEN` | unset | Static server-side creator-role bearer token for `keel-moderation`; used only when claims are disabled |
+| `KEELTUBE_MODERATION_CLAIMS_SECRET` | unset | Shared HS256 secret for OIDC-style claims; at least 32 characters; enables claims mode |
+| `KEELTUBE_MODERATION_CLAIMS_ISSUER` | `keel-core` | Claims `iss` value |
+| `KEELTUBE_MODERATION_CLAIMS_AUDIENCE` | `keel-moderation` | Claims `aud` value |
+| `KEELTUBE_MODERATION_CLAIMS_TTL_SECONDS` | `60` | Claims lifetime |
+| `KEELTUBE_MODERATION_TIMEOUT_SECONDS` | `10` | Timeout for a single moderation request |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -215,6 +223,57 @@ unset. It validates that a supplied `channel_id` belongs to the target actor.
 Notification rows carry `id`, `kind`, `title`, `body`, `href`, `read`, `read_at`, and `created_at`.
 The page response also includes `unread_count`, so the web client can render the badge without a
 second request.
+
+## Creator moderation gateway
+
+Core exposes a session-authenticated gateway for the creator-facing moderation record. The browser
+never receives a moderation role token: core authenticates the viewer session, resolves the
+creator's channel, and calls `keel-moderation` with a server-side creator credential.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/studio/moderation/summary` | Creator-scoped moderation counts |
+| `GET` | `/api/v1/studio/moderation/cases` | Creator-scoped cases (`status`, `limit`, `offset`) |
+| `GET` | `/api/v1/studio/moderation/cases/{id}` | Read one creator case |
+| `GET` | `/api/v1/studio/moderation/actions` | Creator-scoped actions (`status`, `limit`, `offset`) |
+| `GET` | `/api/v1/studio/moderation/actions/{id}` | Read one creator action |
+| `GET` | `/api/v1/studio/moderation/appeals` | Creator-scoped appeals (`status`, `limit`, `offset`) |
+| `GET` | `/api/v1/studio/moderation/appeals/{id}` | Read one creator appeal |
+| `GET` | `/api/v1/studio/moderation/ledger` | Creator-scoped ledger records |
+| `GET` | `/api/v1/studio/moderation/ledger/verify` | Verify the complete audit chain |
+| `GET` | `/api/v1/studio/moderation/ledger/export?format=jsonl\|csv` | Export creator-scoped records |
+| `POST` | `/api/v1/studio/moderation/actions/{id}/appeal` | File an appeal on an active action |
+
+The gateway always derives `channel_id` from the authenticated session and ignores a client-supplied
+`channel_id`, so one creator cannot read another creator's record. All unsafe requests use the same
+CSRF rules as the rest of the studio surface. `limit` is capped at 100. Upstream `4xx` responses are
+forwarded with their creator-safe `detail`; a rejected gateway credential or an unreachable service
+returns `502`, and a timeout returns `504`. Ledger exports preserve `Content-Type` and
+`Content-Disposition`.
+
+Set `KEELTUBE_MODERATION_URL` to enable the gateway. The preferred credential is
+`KEELTUBE_MODERATION_CLAIMS_SECRET`: core mints short-lived HS256 JWTs with `iss`, `aud`, `sub`,
+`role`, and `channel_ids` from the authenticated session, and `keel-moderation` verifies them in
+OIDC mode. This removes the static creator channel map and records the real actor as the appellant.
+Set `KEELTUBE_MODERATION_TOKEN` instead only when moderation runs in legacy role-token mode; it must
+be the creator-role token. Leave the URL unset to keep the gateway disabled; the endpoints then
+return `503`.
+
+For the claims path, configure both services with the same 32+ character secret:
+
+```sh
+# core
+KEELTUBE_MODERATION_URL=http://moderation:8082
+KEELTUBE_MODERATION_CLAIMS_SECRET=replace-with-at-least-32-characters
+KEELTUBE_MODERATION_CLAIMS_ISSUER=keel-core
+KEELTUBE_MODERATION_CLAIMS_AUDIENCE=keel-moderation
+
+# moderation
+KEELTUBE_OIDC_ISSUER=keel-core
+KEELTUBE_OIDC_AUDIENCE=keel-moderation
+KEELTUBE_OIDC_HMAC_SECRET=replace-with-at-least-32-characters
+KEELTUBE_OIDC_ALGORITHMS=HS256
+```
 
 ## Watch telemetry and creator analytics
 
@@ -376,7 +435,7 @@ Provider errors are not treated as approval; the job retries and eventually fail
 
 1. Replace the dev fallback with full OIDC behind the same authenticator interface.
 2. Connect approved Google, Apple, and X providers.
-3. Add per-creator scoping to the moderation client contract.
+3. Add direct OIDC token forwarding for non-core moderation clients.
 4. Add report ingestion to the moderation service, not core.
 5. Add server-signed creator export bundles and monetization/payout integration.
 

@@ -19,6 +19,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/mailer"
 	"github.com/keel-foundation/keel-core/internal/media"
+	"github.com/keel-foundation/keel-core/internal/moderation"
 	"github.com/keel-foundation/keel-core/internal/notifications"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
@@ -102,6 +103,26 @@ func main() {
 		}
 		analyticsRetentionDays = value
 	}
+	moderationTimeout := moderation.DefaultTimeout
+	if raw := strings.TrimSpace(os.Getenv("KEELTUBE_MODERATION_TIMEOUT_SECONDS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 {
+			log.Fatalf("KEELTUBE_MODERATION_TIMEOUT_SECONDS must be a positive integer")
+		}
+		moderationTimeout = time.Duration(value) * time.Second
+	}
+	moderationClaimsTTL := time.Minute
+	if raw := strings.TrimSpace(os.Getenv("KEELTUBE_MODERATION_CLAIMS_TTL_SECONDS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 {
+			log.Fatalf("KEELTUBE_MODERATION_CLAIMS_TTL_SECONDS must be a positive integer")
+		}
+		moderationClaimsTTL = time.Duration(value) * time.Second
+	}
+	moderationClaimsSecret := strings.TrimSpace(os.Getenv("KEELTUBE_MODERATION_CLAIMS_SECRET"))
+	if moderationClaimsSecret != "" && len(moderationClaimsSecret) < 32 {
+		log.Fatalf("KEELTUBE_MODERATION_CLAIMS_SECRET must be at least 32 characters")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -128,6 +149,17 @@ func main() {
 		st,
 		discovery.EmbedderFromEnv(os.Getenv),
 		discovery.DefaultConfig(),
+	)
+	moderationClient := moderation.NewClient(
+		config.EnvOrDefault("KEELTUBE_MODERATION_URL", ""),
+		os.Getenv("KEELTUBE_MODERATION_TOKEN"),
+		moderationTimeout,
+	)
+	moderationClient.WithClaims(
+		moderationClaimsSecret,
+		config.EnvOrDefault("KEELTUBE_MODERATION_CLAIMS_ISSUER", "keel-core"),
+		config.EnvOrDefault("KEELTUBE_MODERATION_CLAIMS_AUDIENCE", "keel-moderation"),
+		moderationClaimsTTL,
 	)
 
 	mediaConfig, err := media.FromEnv(os.Getenv)
@@ -168,6 +200,7 @@ func main() {
 			Identity:      identityService,
 			Discovery:     discoveryEngine,
 			Notifications: notificationService,
+			Moderation:    moderationClient,
 			Media:         studioMedia,
 			InternalToken: strings.TrimSpace(os.Getenv("KEELTUBE_INTERNAL_TOKEN")),
 			Origins:       allowedOrigins(),

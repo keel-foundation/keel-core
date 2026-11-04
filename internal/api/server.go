@@ -11,6 +11,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/identity"
+	"github.com/keel-foundation/keel-core/internal/moderation"
 	"github.com/keel-foundation/keel-core/internal/notifications"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
@@ -21,6 +22,7 @@ type Options struct {
 	Identity      *identity.Service
 	Discovery     *discovery.Engine
 	Notifications *notifications.Service
+	Moderation    moderation.Service
 	Media         StudioMedia
 	InternalToken string
 	Origins       []string
@@ -35,6 +37,7 @@ type Server struct {
 	identity      *identity.Service
 	discovery     *discovery.Engine
 	notifications *notifications.Service
+	moderation    moderation.Service
 	media         StudioMedia
 	internalToken string
 	limiter       *rateLimiter
@@ -60,6 +63,7 @@ func New(options Options) http.Handler {
 		identity:      options.Identity,
 		discovery:     discoveryEngine,
 		notifications: notificationService,
+		moderation:    options.Moderation,
 		media:         options.Media,
 		internalToken: options.InternalToken,
 		trustProxy:    options.TrustProxy,
@@ -140,6 +144,18 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/studio/uploads/{id}/parts", s.refreshStudioUploadParts)
 	mux.HandleFunc("POST /api/v1/studio/uploads/{id}/complete", s.completeStudioUpload)
 	mux.HandleFunc("DELETE /api/v1/studio/uploads/{id}", s.abortStudioUpload)
+
+	mux.HandleFunc("GET /api/v1/studio/moderation/summary", s.moderationSummary)
+	mux.HandleFunc("GET /api/v1/studio/moderation/cases", s.moderationCases)
+	mux.HandleFunc("GET /api/v1/studio/moderation/cases/{id}", s.moderationCase)
+	mux.HandleFunc("GET /api/v1/studio/moderation/actions", s.moderationActions)
+	mux.HandleFunc("GET /api/v1/studio/moderation/actions/{id}", s.moderationAction)
+	mux.HandleFunc("GET /api/v1/studio/moderation/appeals", s.moderationAppeals)
+	mux.HandleFunc("GET /api/v1/studio/moderation/appeals/{id}", s.moderationAppeal)
+	mux.HandleFunc("GET /api/v1/studio/moderation/ledger", s.moderationLedger)
+	mux.HandleFunc("GET /api/v1/studio/moderation/ledger/verify", s.moderationLedgerVerify)
+	mux.HandleFunc("GET /api/v1/studio/moderation/ledger/export", s.moderationLedgerExport)
+	mux.HandleFunc("POST /api/v1/studio/moderation/actions/{id}/appeal", s.moderationFileAppeal)
 
 	mux.HandleFunc("GET /api/v1/media/{id}/video.mp4", s.mediaMP4)
 	mux.HandleFunc("GET /api/v1/media/{id}/thumbnail.jpg", s.mediaThumbnail)

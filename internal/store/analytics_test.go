@@ -27,7 +27,7 @@ func viewerFor(actorID string) store.Viewer {
 func TestStartViewDeduplicatesAndTracksProgress(t *testing.T) {
 	st := analyticsStore(t)
 	ctx := context.Background()
-	start := time.Now().UTC().Truncate(time.Second)
+	start := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
 	first, err := st.StartView(ctx, viewerFor("usr_demo"), "vid_even_keel", "watch", start)
 	if err != nil {
@@ -148,7 +148,10 @@ func TestDiscoveryEventsAndAnalytics(t *testing.T) {
 func TestPruneTelemetryKeepsDailyAggregates(t *testing.T) {
 	st := analyticsStore(t)
 	ctx := context.Background()
-	old := time.Now().UTC().AddDate(0, 0, -100).Truncate(time.Second)
+	now := time.Now().UTC()
+	old := time.Date(
+		now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC,
+	).AddDate(0, 0, -100)
 	view, err := st.StartView(ctx, viewerFor("usr_demo"), "vid_even_keel", "feed", old)
 	if err != nil {
 		t.Fatalf("start old view: %v", err)
@@ -214,7 +217,7 @@ func TestViewDedupWindowExpires(t *testing.T) {
 func TestProgressIgnoresSeeksAndCountsCompletionOnce(t *testing.T) {
 	st := analyticsStore(t)
 	ctx := context.Background()
-	start := time.Now().UTC().Truncate(time.Second)
+	start := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	view, err := st.StartView(ctx, viewerFor("usr_demo"), "vid_even_keel", "watch", start)
 	if err != nil {
 		t.Fatalf("start view: %v", err)
