@@ -468,3 +468,58 @@ func mapWriteError(err error) error {
 	}
 	return err
 }
+
+func (s *Store) ListAccountSessions(ctx context.Context, accountID string) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, account_id, token_hash, provider, user_agent, ip_address,
+		       created_at, last_seen_at, expires_at, revoked_at
+		FROM sessions
+		WHERE account_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sessions := make([]Session, 0)
+	for rows.Next() {
+		var session Session
+		var revoked sql.NullTime
+		err := rows.Scan(
+			&session.ID, &session.AccountID, &session.TokenHash, &session.Provider,
+			&session.UserAgent, &session.IPAddress, &session.CreatedAt,
+			&session.LastSeenAt, &session.ExpiresAt, &revoked,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if revoked.Valid {
+			session.RevokedAt = &revoked.Time
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+func (s *Store) RevokeAccountSession(ctx context.Context, accountID, sessionID string, at time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE sessions SET revoked_at = $3
+		WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL
+	`, sessionID, accountID, at)
+	if err != nil {
+		return false, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return updated > 0, nil
+}
+
+func (s *Store) RevokeOtherAccountSessions(ctx context.Context, accountID, sessionID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sessions SET revoked_at = $3
+		WHERE account_id = $1 AND id <> $2 AND revoked_at IS NULL
+	`, accountID, sessionID, at)
+	return err
+}

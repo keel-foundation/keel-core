@@ -9,12 +9,15 @@ import (
 )
 
 var csrfExempt = map[string]bool{
-	"/api/v1/auth/register":            true,
-	"/api/v1/auth/login":               true,
-	"/api/v1/auth/verify-email":        true,
-	"/api/v1/auth/resend-verification": true,
-	"/api/v1/auth/forgot-password":     true,
-	"/api/v1/auth/reset-password":      true,
+	"/api/v1/auth/register":               true,
+	"/api/v1/auth/login":                  true,
+	"/api/v1/auth/verify-email":           true,
+	"/api/v1/auth/resend-verification":    true,
+	"/api/v1/auth/forgot-password":        true,
+	"/api/v1/auth/reset-password":         true,
+	"/api/v1/auth/social/google/callback": true,
+	"/api/v1/auth/social/apple/callback":  true,
+	"/api/v1/auth/social/x/callback":      true,
 }
 
 // withCSRF applies double-submit CSRF validation to unsafe requests that carry a

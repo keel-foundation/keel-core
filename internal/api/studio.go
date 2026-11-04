@@ -45,6 +45,7 @@ type StudioMedia interface {
 	CompleteThumbnailUpload(context.Context, string, string, string) error
 	PresignGet(context.Context, string) (string, error)
 	GetObject(context.Context, string) (io.ReadCloser, error)
+	PurgeVideo(context.Context, string, string, string) error
 }
 
 type studioVideoPage struct {
@@ -179,6 +180,7 @@ func (s *Server) listStudioVideos(w http.ResponseWriter, r *http.Request) {
 		Visibility: strings.TrimSpace(r.URL.Query().Get("visibility")),
 		Format:     strings.TrimSpace(r.URL.Query().Get("format")),
 		Category:   strings.TrimSpace(r.URL.Query().Get("category")),
+		Query:      strings.TrimSpace(r.URL.Query().Get("q")),
 		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
 		Limit:      limit,
 		Offset:     offset,
@@ -350,6 +352,9 @@ func (s *Server) updateStudioVideo(w http.ResponseWriter, r *http.Request) {
 		writeStudioError(w, err)
 		return
 	}
+	if s.federation != nil && (result.Status == "published" || result.Status == "demonetized") && result.Visibility == "public" {
+		s.federation.UpdateVideo(r.Context(), result)
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -379,6 +384,9 @@ func (s *Server) publishStudioVideo(w http.ResponseWriter, r *http.Request) {
 			}
 		}(video.ID)
 	}
+	if s.federation != nil {
+		s.federation.PublishVideo(r.Context(), video)
+	}
 	writeJSON(w, http.StatusOK, video)
 }
 
@@ -391,6 +399,9 @@ func (s *Server) unpublishStudioVideo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStudioError(w, err)
 		return
+	}
+	if s.federation != nil {
+		s.federation.DeleteVideo(r.Context(), video)
 	}
 	writeJSON(w, http.StatusOK, video)
 }
@@ -482,6 +493,12 @@ func (s *Server) studioStats(w http.ResponseWriter, r *http.Request) {
 		writeStudioError(w, err)
 		return
 	}
+	monetization, err := s.store.GetMonetization(r.Context(), channel.ID)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	stats.Revenue = monetization.Balance
 	writeJSON(w, http.StatusOK, stats)
 }
 
@@ -957,6 +974,12 @@ func writeStudioError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not found"})
 	case errors.Is(err, store.ErrConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"detail": "The video changed since it was loaded."})
+	case errors.Is(err, store.ErrNotArchived):
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": "Archive the video before purging it."})
+	case errors.Is(err, store.ErrPurgeBusy):
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": "Media work is still active for this video. Try again after it finishes."})
+	case errors.Is(err, media.ErrPurgeUnsupported):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "Media storage cannot delete a media prefix."})
 	case errors.Is(err, store.ErrInvalidState):
 		writeJSON(w, http.StatusConflict, map[string]string{"detail": "The video is not in a state that allows this action."})
 	case errors.Is(err, store.ErrInvalidInput):
@@ -1148,4 +1171,118 @@ func (s *Server) mediaSegmentHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) mediaSubtitleHandler(w http.ResponseWriter, r *http.Request) {
 	s.mediaSubtitle(w, r)
+}
+
+type scheduleStudioVideoRequest struct {
+	ScheduledAt string `json:"scheduled_at"`
+}
+
+func (s *Server) archiveStudioVideo(w http.ResponseWriter, r *http.Request) {
+	_, channel, ok := s.requireStudioChannel(w, r)
+	if !ok {
+		return
+	}
+	video, err := s.store.ArchiveStudioVideo(
+		r.Context(), channel.ID, r.PathValue("id"), time.Now().UTC(),
+	)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	if s.federation != nil {
+		s.federation.DeleteVideo(r.Context(), video)
+	}
+	writeJSON(w, http.StatusOK, video)
+}
+
+func (s *Server) purgeStudioVideo(w http.ResponseWriter, r *http.Request) {
+	principal, channel, ok := s.requireStudioChannel(w, r)
+	if !ok {
+		return
+	}
+	if s.media == nil {
+		writeStudioError(w, media.ErrDisabled)
+		return
+	}
+	video, err := s.store.GetStudioVideo(r.Context(), channel.ID, r.PathValue("id"))
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	if err := s.media.PurgeVideo(
+		r.Context(), channel.ID, principal.ID, r.PathValue("id"),
+	); err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	if s.federation != nil {
+		s.federation.DeleteVideo(r.Context(), video)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) restoreStudioVideo(w http.ResponseWriter, r *http.Request) {
+	_, channel, ok := s.requireStudioChannel(w, r)
+	if !ok {
+		return
+	}
+	video, err := s.store.RestoreStudioVideo(
+		r.Context(), channel.ID, r.PathValue("id"), time.Now().UTC(),
+	)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, video)
+}
+
+func (s *Server) scheduleStudioVideo(w http.ResponseWriter, r *http.Request) {
+	_, channel, ok := s.requireStudioChannel(w, r)
+	if !ok {
+		return
+	}
+	var body scheduleStudioVideoRequest
+	if err := decodeJSONBody(w, r, &body); err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	scheduledAt, err := time.Parse(time.RFC3339, strings.TrimSpace(body.ScheduledAt))
+	if err != nil {
+		writeStudioError(w, &validationError{
+			Field:   "scheduled_at",
+			Message: "scheduled_at must be an RFC3339 timestamp",
+		})
+		return
+	}
+	now := time.Now().UTC()
+	if !scheduledAt.After(now) {
+		writeStudioError(w, &validationError{
+			Field:   "scheduled_at",
+			Message: "scheduled_at must be in the future",
+		})
+		return
+	}
+	video, err := s.store.ScheduleStudioVideo(
+		r.Context(), channel.ID, r.PathValue("id"), scheduledAt.UTC(), now,
+	)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, video)
+}
+
+func (s *Server) clearStudioSchedule(w http.ResponseWriter, r *http.Request) {
+	_, channel, ok := s.requireStudioChannel(w, r)
+	if !ok {
+		return
+	}
+	video, err := s.store.ClearStudioSchedule(
+		r.Context(), channel.ID, r.PathValue("id"), time.Now().UTC(),
+	)
+	if err != nil {
+		writeStudioError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, video)
 }

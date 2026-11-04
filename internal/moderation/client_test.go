@@ -59,6 +59,7 @@ func TestClientListCasesPassesFilters(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = map[string]string{
 			"status":     r.URL.Query().Get("status"),
+			"video_id":   r.URL.Query().Get("video_id"),
 			"limit":      r.URL.Query().Get("limit"),
 			"offset":     r.URL.Query().Get("offset"),
 			"channel_id": r.URL.Query().Get("channel_id"),
@@ -68,11 +69,12 @@ func TestClientListCasesPassesFilters(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "", time.Second)
-	if _, err := client.ListCases(context.Background(), testIdentity, "ch_maravale", "open", 25, 5); err != nil {
+	if _, err := client.ListCases(context.Background(), testIdentity, "ch_maravale", "open", "vid_demo_001", 25, 5); err != nil {
 		t.Fatalf("list cases: %v", err)
 	}
 	want := map[string]string{
 		"status":     "open",
+		"video_id":   "vid_demo_001",
 		"limit":      "25",
 		"offset":     "5",
 		"channel_id": "ch_maravale",
@@ -286,5 +288,39 @@ func TestClientLimitsResponseSize(t *testing.T) {
 	client := NewClient(server.URL, "", time.Second)
 	if _, err := client.Summary(context.Background(), testIdentity, "ch_demo"); err == nil {
 		t.Fatal("expected oversized response error")
+	}
+}
+
+func TestClientReportUsesSignalToken(t *testing.T) {
+	var gotPath, gotAuthorization string
+	var gotBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuthorization = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"case":{"id":"case_1"},"signal":{"id":"sig_1"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "gateway-token", time.Second).WithSignalToken("signal-token")
+	response, err := client.Report(
+		context.Background(), "ch_demo", "video", "vid_demo_001", "spam", "Looks automated.", "usr_viewer",
+	)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if gotPath != "/v1/signals" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if gotAuthorization != "Bearer signal-token" {
+		t.Fatalf("unexpected authorization: %s", gotAuthorization)
+	}
+	if gotBody["channel_id"] != "ch_demo" || gotBody["subject_id"] != "vid_demo_001" {
+		t.Fatalf("unexpected body: %v", gotBody)
+	}
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected status: %d", response.StatusCode)
 	}
 }

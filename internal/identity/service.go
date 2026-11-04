@@ -24,6 +24,7 @@ var (
 	ErrInvalidCode        = errors.New("invalid or expired verification code")
 	ErrTooManyAttempts    = errors.New("too many attempts")
 	ErrInvalidResetToken  = errors.New("invalid or expired reset token")
+	ErrInvalidPassword    = errors.New("current password is incorrect")
 )
 
 var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
@@ -105,6 +106,18 @@ type SessionResult struct {
 	Provider   string    `json:"provider"`
 	SignedInAt time.Time `json:"signed_in_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+type SessionInfo struct {
+	ID         string     `json:"id"`
+	Current    bool       `json:"current"`
+	Provider   string     `json:"provider"`
+	UserAgent  string     `json:"user_agent,omitempty"`
+	IPAddress  string     `json:"ip_address,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastSeenAt time.Time  `json:"last_seen_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
 type RegisterInput struct {
@@ -374,6 +387,10 @@ func (s *Service) Login(ctx context.Context, input LoginInput, meta RequestMeta)
 	}
 	if err != nil {
 		return SessionResult{}, err
+	}
+
+	if account.PasswordHash == "" {
+		return SessionResult{}, ErrInvalidCredentials
 	}
 
 	now := s.now()
@@ -894,4 +911,119 @@ func handleFromName(name string) string {
 		handle = handle[:24]
 	}
 	return "@" + handle
+}
+
+func (s *Service) sessionIdentity(ctx context.Context, rawToken string) (store.SessionIdentity, error) {
+	if rawToken == "" {
+		return store.SessionIdentity{}, auth.ErrUnauthorized
+	}
+	identity, err := s.store.GetSessionByTokenHash(ctx, auth.HashToken(rawToken))
+	if errors.Is(err, store.ErrNotFound) {
+		return store.SessionIdentity{}, auth.ErrUnauthorized
+	}
+	if err != nil {
+		return store.SessionIdentity{}, err
+	}
+	now := s.now()
+	if identity.Session.RevokedAt != nil || !now.Before(identity.Session.ExpiresAt) {
+		return store.SessionIdentity{}, auth.ErrUnauthorized
+	}
+	return identity, nil
+}
+
+func (s *Service) ChangePassword(
+	ctx context.Context,
+	rawToken, currentPassword, newPassword string,
+	meta RequestMeta,
+) error {
+	identity, err := s.sessionIdentity(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(currentPassword) == "" {
+		return &ValidationError{Field: "current_password", Message: "Current password is required."}
+	}
+	ok, err := auth.VerifyPassword(currentPassword, identity.Account.PasswordHash)
+	if err != nil || !ok {
+		return ErrInvalidPassword
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	hash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	if err := s.store.UpdateAccountPassword(ctx, identity.Account.ID, hash, now); err != nil {
+		return err
+	}
+	if err := s.store.RevokeOtherAccountSessions(ctx, identity.Account.ID, identity.Session.ID, now); err != nil {
+		return err
+	}
+	s.record(ctx, identity.Account.ID, "auth.password_changed", meta, now, nil)
+	return nil
+}
+
+func (s *Service) ListSessions(ctx context.Context, rawToken string) ([]SessionInfo, error) {
+	identity, err := s.sessionIdentity(ctx, rawToken)
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := s.store.ListAccountSessions(ctx, identity.Account.ID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]SessionInfo, 0, len(sessions))
+	for _, session := range sessions {
+		result = append(result, SessionInfo{
+			ID:         session.ID,
+			Current:    session.ID == identity.Session.ID,
+			Provider:   session.Provider,
+			UserAgent:  session.UserAgent,
+			IPAddress:  session.IPAddress,
+			CreatedAt:  session.CreatedAt,
+			LastSeenAt: session.LastSeenAt,
+			ExpiresAt:  session.ExpiresAt,
+			RevokedAt:  session.RevokedAt,
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) RevokeSession(
+	ctx context.Context,
+	rawToken, sessionID string,
+	meta RequestMeta,
+) error {
+	identity, err := s.sessionIdentity(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	revoked, err := s.store.RevokeAccountSession(
+		ctx, identity.Account.ID, sessionID, s.now(),
+	)
+	if err != nil {
+		return err
+	}
+	if !revoked {
+		return store.ErrNotFound
+	}
+	s.record(ctx, identity.Account.ID, "auth.session_revoked", meta, s.now(), map[string]any{
+		"session_id": sessionID,
+	})
+	return nil
+}
+
+func (s *Service) RevokeOtherSessions(ctx context.Context, rawToken string, meta RequestMeta) error {
+	identity, err := s.sessionIdentity(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	if err := s.store.RevokeOtherAccountSessions(ctx, identity.Account.ID, identity.Session.ID, now); err != nil {
+		return err
+	}
+	s.record(ctx, identity.Account.ID, "auth.sessions_revoked", meta, now, nil)
+	return nil
 }

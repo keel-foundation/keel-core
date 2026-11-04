@@ -405,6 +405,9 @@ func Run(ctx context.Context, st *store.Store, demoMediaURL, webURL, demoEmail, 
 			return err
 		}
 	}
+	if err := seedFinance(ctx, st); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -415,4 +418,47 @@ func at(value time.Time) *time.Time {
 func contentHash(id string) string {
 	sum := sha256.Sum256([]byte("keeltube:" + id))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func seedFinance(ctx context.Context, st *store.Store) error {
+	channelID := "ch_demo"
+	nextPayout := time.Date(2026, 11, 30, 12, 0, 0, 0, time.UTC)
+	if err := st.UpsertMonetization(ctx, store.Monetization{
+		ChannelID:    channelID,
+		Eligible:     true,
+		RPM:          4.82,
+		Holdback:     620,
+		Balance:      12840.5,
+		Currency:     "USD",
+		NextPayoutAt: &nextPayout,
+		UpdatedAt:    demoTime,
+	}); err != nil {
+		return err
+	}
+
+	earnings := []store.Earning{
+		{ID: "ern_001", ChannelID: channelID, Date: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC), Description: "October ad revenue", Type: "ad_revenue", Amount: 4280.5, Balance: 12840.5},
+		{ID: "ern_002", ChannelID: channelID, Date: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC), Description: "October payout", Type: "payout", Amount: -4280.5, Balance: 8560},
+		{ID: "ern_003", ChannelID: channelID, Date: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC), Description: "Membership revenue", Type: "membership", Amount: 1240.25, Balance: 12840.5},
+		{ID: "ern_004", ChannelID: channelID, Date: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), Description: "September payout", Type: "payout", Amount: -3940.25, Balance: 11600.25},
+		{ID: "ern_005", ChannelID: channelID, Date: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), Description: "September ad revenue", Type: "ad_revenue", Amount: 3940.25, Balance: 15540.5},
+		{ID: "ern_006", ChannelID: channelID, Date: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), Description: "Dispute holdback", Type: "holdback", Amount: -620, Balance: 11600.25},
+	}
+	for _, earning := range earnings {
+		if err := st.UpsertEarning(ctx, earning); err != nil {
+			return err
+		}
+	}
+
+	payouts := []store.Payout{
+		{ID: "pay_2026_10", ChannelID: channelID, Period: "October 2026", Amount: 4280.5, Status: "paid", Date: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)},
+		{ID: "pay_2026_09", ChannelID: channelID, Period: "September 2026", Amount: 3940.25, Status: "paid", Date: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)},
+		{ID: "pay_2026_11", ChannelID: channelID, Period: "November 2026", Amount: 4619.75, Status: "pending", Date: nextPayout},
+	}
+	for _, payout := range payouts {
+		if err := st.UpsertPayout(ctx, payout); err != nil {
+			return err
+		}
+	}
+	return nil
 }

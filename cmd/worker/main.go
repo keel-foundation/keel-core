@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/db"
 	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/media"
+	"github.com/keel-foundation/keel-core/internal/moderation"
 	"github.com/keel-foundation/keel-core/internal/notifications"
 	"github.com/keel-foundation/keel-core/internal/store"
 )
@@ -80,6 +82,36 @@ func main() {
 	}
 	mediaEngine.OnFailure = func(ctx context.Context, videoID, message string) error {
 		return notificationService.UploadFailed(ctx, videoID, message)
+	}
+	moderationTimeout := moderation.DefaultTimeout
+	moderationClient := moderation.NewClient(
+		config.EnvOrDefault("KEELTUBE_MODERATION_URL", ""),
+		"",
+		moderationTimeout,
+	).WithSignalToken(os.Getenv("KEELTUBE_MODERATION_SIGNAL_TOKEN"))
+	mediaEngine.OnScan = func(
+		ctx context.Context,
+		video store.Video,
+		verdict, scanner string,
+		findings []media.Finding,
+		reason string,
+	) error {
+		if moderationClient == nil || !moderationClient.Enabled() {
+			return nil
+		}
+		signalType := "other"
+		text := strings.ToLower(scanner + " " + reason)
+		if strings.Contains(text, "copyright") || strings.Contains(text, "blocklist") ||
+			strings.Contains(text, "duplicate") {
+			signalType = "copyright"
+		}
+		details := fmt.Sprintf(
+			"%s scan returned %s: %s (findings: %d)", scanner, verdict, reason, len(findings),
+		)
+		_, err := moderationClient.Report(
+			ctx, video.ChannelID, "video", video.ID, signalType, details, "",
+		)
+		return err
 	}
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

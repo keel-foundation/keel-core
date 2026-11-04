@@ -23,12 +23,15 @@ func TestMigrateCreatesSchemaAndIsIdempotent(t *testing.T) {
 	for _, table := range []string{
 		"actors", "channels", "videos",
 		"accounts", "sessions", "email_verifications", "password_resets", "auth_events",
+		"account_identities", "oauth_states",
 		"subscriptions", "video_reactions", "saved_videos", "watch_history",
 		"comments", "comment_likes", "video_embeddings", "actor_embeddings",
 		"video_versions", "video_subtitles", "media_uploads", "media_jobs",
-		"media_scans", "media_blocklist", "media_assets",
+		"media_scans", "media_blocklist", "media_assets", "media_purges",
 		"video_view_sessions", "video_view_events", "discovery_events",
 		"video_daily_analytics", "notifications",
+		"federation_instance", "federation_peers", "federation_followers",
+		"federation_following", "federation_deliveries", "federation_inbox_activities",
 	} {
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `

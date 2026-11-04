@@ -22,19 +22,26 @@ type Actor struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type ChannelLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
 type Channel struct {
-	ID          string    `json:"id"`
-	ActorID     string    `json:"actor_id"`
-	Handle      string    `json:"handle"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	AvatarURL   string    `json:"avatar_url,omitempty"`
-	Subscribers int64     `json:"subscribers"`
-	Verified    bool      `json:"verified"`
-	VideoCount  int64     `json:"video_count"`
-	TotalViews  int64     `json:"total_views"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string        `json:"id"`
+	ActorID     string        `json:"actor_id"`
+	Handle      string        `json:"handle"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	AvatarURL   string        `json:"avatar_url,omitempty"`
+	BannerURL   string        `json:"banner_url,omitempty"`
+	Links       []ChannelLink `json:"links"`
+	Subscribers int64         `json:"subscribers"`
+	Verified    bool          `json:"verified"`
+	VideoCount  int64         `json:"video_count"`
+	TotalViews  int64         `json:"total_views"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
 type Playback struct {
@@ -76,6 +83,8 @@ type Video struct {
 	CommentsCount   int64      `json:"comments_count"`
 	CreatedAt       time.Time  `json:"created_at"`
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
+	ScheduledAt     *time.Time `json:"scheduled_at,omitempty"`
+	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
@@ -163,24 +172,34 @@ func (s *Store) UpsertActor(ctx context.Context, actor Actor) error {
 }
 
 func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
-	_, err := s.db.ExecContext(ctx, `
+	links := channel.Links
+	if links == nil {
+		links = []ChannelLink{}
+	}
+	linksJSON, err := json.Marshal(links)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO channels (
-			id, actor_id, handle, name, description, avatar_url, subscribers, verified,
-			created_at, updated_at
+			id, actor_id, handle, name, description, avatar_url, banner_url, links,
+			subscribers, verified, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			actor_id = EXCLUDED.actor_id,
 			handle = EXCLUDED.handle,
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			avatar_url = EXCLUDED.avatar_url,
+			banner_url = EXCLUDED.banner_url,
+			links = EXCLUDED.links,
 			subscribers = EXCLUDED.subscribers,
 			verified = EXCLUDED.verified,
 			updated_at = EXCLUDED.updated_at
 	`, channel.ID, channel.ActorID, channel.Handle, channel.Name, channel.Description,
-		channel.AvatarURL, channel.Subscribers, channel.Verified, channel.CreatedAt,
-		channel.UpdatedAt,
+		channel.AvatarURL, channel.BannerURL, linksJSON, channel.Subscribers,
+		channel.Verified, channel.CreatedAt, channel.UpdatedAt,
 	)
 	return err
 }
@@ -206,16 +225,22 @@ func videoValues(video Video) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var publishedAt any
+	var publishedAt, scheduledAt, archivedAt any
 	if video.PublishedAt != nil {
 		publishedAt = *video.PublishedAt
+	}
+	if video.ScheduledAt != nil {
+		scheduledAt = *video.ScheduledAt
+	}
+	if video.ArchivedAt != nil {
+		archivedAt = *video.ArchivedAt
 	}
 	return []any{
 		video.ID, video.PublicID, video.ChannelID, video.Title, video.Description,
 		video.Status, video.Visibility, video.ContentHash, video.DurationSeconds,
 		playback, video.License, policy, video.Format, video.Category, tagsJSON,
 		video.Views, video.Likes, video.CommentsCount, video.CreatedAt, publishedAt,
-		video.UpdatedAt,
+		scheduledAt, archivedAt, video.UpdatedAt,
 	}, nil
 }
 
@@ -244,6 +269,8 @@ func (s *Store) UpsertVideo(ctx context.Context, video Video) error {
 			likes = EXCLUDED.likes,
 			comments_count = EXCLUDED.comments_count,
 			published_at = EXCLUDED.published_at,
+			scheduled_at = EXCLUDED.scheduled_at,
+			archived_at = EXCLUDED.archived_at,
 			updated_at = EXCLUDED.updated_at
 	`, values...)
 	return err

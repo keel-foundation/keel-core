@@ -16,14 +16,15 @@ var (
 )
 
 const (
-	videoColumns = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, updated_at`
+	videoColumns = `id, public_id, channel_id, title, description, status, visibility, content_hash, duration_seconds, playback, license, policy, format, category, tags, views, likes, comments_count, created_at, published_at, scheduled_at, archived_at, updated_at`
 	videoInsert  = `INSERT INTO videos (
 		id, public_id, channel_id, title, description, status, visibility, content_hash,
 		duration_seconds, playback, license, policy, format, category, tags,
-		views, likes, comments_count, created_at, published_at, updated_at
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`
-	videoColumnsV       = `v.id, v.public_id, v.channel_id, v.title, v.description, v.status, v.visibility, v.content_hash, v.duration_seconds, v.playback, v.license, v.policy, v.format, v.category, v.tags, v.views, v.likes, v.comments_count, v.created_at, v.published_at, v.updated_at`
-	channelColumns      = `id, actor_id, handle, name, description, avatar_url, subscribers, verified, created_at, updated_at`
+		views, likes, comments_count, created_at, published_at, scheduled_at,
+		archived_at, updated_at
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`
+	videoColumnsV       = `v.id, v.public_id, v.channel_id, v.title, v.description, v.status, v.visibility, v.content_hash, v.duration_seconds, v.playback, v.license, v.policy, v.format, v.category, v.tags, v.views, v.likes, v.comments_count, v.created_at, v.published_at, v.scheduled_at, v.archived_at, v.updated_at`
+	channelColumns      = `id, actor_id, handle, name, description, avatar_url, banner_url, links, subscribers, verified, created_at, updated_at`
 	channelStatsColumns = `(SELECT COUNT(*) FROM videos v
 		WHERE v.channel_id = channels.id
 		  AND v.status IN ('published', 'demonetized')
@@ -57,13 +58,13 @@ type rowScanner interface {
 func scanVideo(scanner rowScanner) (Video, error) {
 	var video Video
 	var playbackJSON, policyJSON, tagsJSON []byte
-	var publishedAt sql.NullTime
+	var publishedAt, scheduledAt, archivedAt sql.NullTime
 	err := scanner.Scan(
 		&video.ID, &video.PublicID, &video.ChannelID, &video.Title, &video.Description,
 		&video.Status, &video.Visibility, &video.ContentHash, &video.DurationSeconds,
 		&playbackJSON, &video.License, &policyJSON, &video.Format, &video.Category,
 		&tagsJSON, &video.Views, &video.Likes, &video.CommentsCount, &video.CreatedAt,
-		&publishedAt, &video.UpdatedAt,
+		&publishedAt, &scheduledAt, &archivedAt, &video.UpdatedAt,
 	)
 	if err != nil {
 		return Video{}, err
@@ -89,17 +90,36 @@ func scanVideo(scanner rowScanner) (Video, error) {
 	if publishedAt.Valid {
 		video.PublishedAt = &publishedAt.Time
 	}
+	if scheduledAt.Valid {
+		video.ScheduledAt = &scheduledAt.Time
+	}
+	if archivedAt.Valid {
+		video.ArchivedAt = &archivedAt.Time
+	}
 	return video, nil
 }
 
 func scanChannelWithStats(scanner rowScanner) (Channel, error) {
 	var channel Channel
+	var linksJSON []byte
 	err := scanner.Scan(
 		&channel.ID, &channel.ActorID, &channel.Handle, &channel.Name, &channel.Description,
-		&channel.AvatarURL, &channel.Subscribers, &channel.Verified, &channel.CreatedAt,
-		&channel.UpdatedAt, &channel.VideoCount, &channel.TotalViews,
+		&channel.AvatarURL, &channel.BannerURL, &linksJSON, &channel.Subscribers,
+		&channel.Verified, &channel.CreatedAt, &channel.UpdatedAt, &channel.VideoCount,
+		&channel.TotalViews,
 	)
-	return channel, err
+	if err != nil {
+		return Channel{}, err
+	}
+	if len(linksJSON) > 0 && string(linksJSON) != "null" {
+		if err := json.Unmarshal(linksJSON, &channel.Links); err != nil {
+			return Channel{}, err
+		}
+	}
+	if channel.Links == nil {
+		channel.Links = []ChannelLink{}
+	}
+	return channel, nil
 }
 
 func (s *Store) ListVideos(ctx context.Context, filter VideoFilter) ([]Video, int, error) {
@@ -171,7 +191,7 @@ func (s *Store) ListVideos(ctx context.Context, filter VideoFilter) ([]Video, in
 	return videos, total, nil
 }
 
-func (s *Store) SearchVideos(ctx context.Context, query, format string, limit, offset int) ([]Video, int, error) {
+func (s *Store) SearchVideos(ctx context.Context, query, format, channelID string, limit, offset int) ([]Video, int, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -194,6 +214,10 @@ func (s *Store) SearchVideos(ctx context.Context, query, format string, limit, o
 	if format != "" {
 		args = append(args, format)
 		clauses = append(clauses, fmt.Sprintf("v.format = $%d", len(args)))
+	}
+	if channelID != "" {
+		args = append(args, channelID)
+		clauses = append(clauses, fmt.Sprintf("v.channel_id = $%d", len(args)))
 	}
 	where := strings.Join(clauses, " AND ")
 

@@ -29,7 +29,12 @@ func Open(t *testing.T) *sql.DB {
 	}
 	if _, err := conn.ExecContext(ctx, `
 		TRUNCATE notifications, video_view_events, video_view_sessions, discovery_events,
-		         video_daily_analytics, media_scans, media_jobs, media_assets,
+		         video_daily_analytics, media_scans, media_jobs, media_assets, media_purges,
+		         oauth_states, account_identities,
+		         federation_inbox_activities, federation_deliveries, federation_following,
+		         federation_followers, federation_peers, federation_instance,
+		         creator_earnings, creator_payouts, creator_monetization,
+		         playlist_items, playlists, reports,
 		         video_subtitles, video_versions, media_uploads, media_blocklist,
 		         comment_likes, comments, watch_history, saved_videos, video_reactions,
 		         subscriptions, actor_embeddings, video_embeddings, auth_events,

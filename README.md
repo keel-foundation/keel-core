@@ -7,8 +7,8 @@ moderation-facing domain model.
 in PostgreSQL. Email/password registration, email verification, login, logout, password reset, the
 public catalog and discovery endpoints, viewer engagement (subscriptions, reactions, saves, watch
 history, comments, and replies), the creator studio/media engine, watch telemetry/creator analytics,
-and the session-authenticated creator moderation gateway are implemented. Social providers and full
-OIDC are not implemented yet.
+and the session-authenticated creator moderation gateway are implemented. Social OIDC/OAuth
+sign-in for Google, Apple, and X, including account linking and PKCE, is implemented.
 
 ## Configuration
 
@@ -70,6 +70,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_SCANNER_URL` | unset | Optional external copyright/policy scanner |
 | `KEELTUBE_MEDIA_SCANNER_TOKEN` | unset | Bearer token for the external scanner |
 | `KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS` | `10` | External scanner timeout |
+| `KEELTUBE_RERANKER_URL` | unset | Optional cross-encoder reranker for semantic search; unset uses the lexical reranker |
 | `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
 | `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for the internal notification-ingest endpoint; unset disables the route |
 | `KEELTUBE_MODERATION_URL` | unset | `keel-moderation` base URL; unset returns 503 from the creator moderation gateway |
@@ -79,6 +80,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MODERATION_CLAIMS_AUDIENCE` | `keel-moderation` | Claims `aud` value |
 | `KEELTUBE_MODERATION_CLAIMS_TTL_SECONDS` | `60` | Claims lifetime |
 | `KEELTUBE_MODERATION_TIMEOUT_SECONDS` | `10` | Timeout for a single moderation request |
+| `KEELTUBE_MODERATION_SIGNAL_TOKEN` | unset | Server-side token for viewer-report ingestion into `keel-moderation` `/v1/signals`; unset disables `POST /api/v1/reports` |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -92,10 +94,29 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MAIL_API_KEY` | unset | Mailtrap/Mailgun API key; unset uses the log mailer |
 | `KEELTUBE_MAIL_DOMAIN` | unset | Mailgun sending domain |
 | `KEELTUBE_MAIL_BASE_URL` | provider default | Optional Mailtrap/Mailgun base URL override |
+| `KEELTUBE_FEDERATION_DOMAIN` | unset | Enables ActivityPub federation for this instance |
+| `KEELTUBE_FEDERATION_BASE_URL` | `https://<domain>` | Public base URL for federation documents |
+| `KEELTUBE_FEDERATION_ACTOR_ID` | `instance` | Instance actor ID |
+| `KEELTUBE_FEDERATION_POLICY_VERSION` | `demo-0.1` | Published policy version |
+| `KEELTUBE_FEDERATION_TIMEOUT_SECONDS` | `10` | Remote actor/delivery timeout |
+| `KEELTUBE_FEDERATION_DELIVERY_LEASE_SECONDS` | `300` | Delivery worker lease |
+| `KEELTUBE_FEDERATION_ALLOW_PRIVATE` | `false` | Allow private-network remote actors for local testing |
 | `KEELTUBE_SESSION_COOKIE` | `keeltube_session` | Session cookie name |
 | `KEELTUBE_CSRF_COOKIE` | `keeltube_csrf` | CSRF cookie name |
 | `KEELTUBE_COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `KEELTUBE_COOKIE_DOMAIN` | unset | Optional cookie domain |
+| `KEELTUBE_SOCIAL_CALLBACK_BASE_URL` | `http://localhost:8080` | Public core URL used for provider callbacks |
+| `KEELTUBE_SOCIAL_STATE_TTL_SECONDS` | `600` | OAuth state lifetime, 60-3600 seconds |
+| `KEELTUBE_GOOGLE_CLIENT_ID` | unset | Enables Google sign-in |
+| `KEELTUBE_GOOGLE_CLIENT_SECRET` | unset | Google OAuth client secret |
+| `KEELTUBE_APPLE_CLIENT_ID` | unset | Enables Apple sign-in |
+| `KEELTUBE_APPLE_CLIENT_SECRET` | unset | Static Apple client secret; otherwise use the TEAM_ID/KEY_ID/PRIVATE_KEY pair |
+| `KEELTUBE_APPLE_TEAM_ID` | unset | Apple developer team ID for generated client secrets |
+| `KEELTUBE_APPLE_KEY_ID` | unset | Apple private key ID for generated client secrets |
+| `KEELTUBE_APPLE_PRIVATE_KEY` | unset | Apple `.p8` private key contents with escaped newlines |
+| `KEELTUBE_APPLE_PRIVATE_KEY_PATH` | unset | Path to the Apple `.p8` private key |
+| `KEELTUBE_X_CLIENT_ID` | unset | Enables X sign-in |
+| `KEELTUBE_X_CLIENT_SECRET` | unset | X OAuth 2.0 client secret |
 
 ### SMTP
 
@@ -113,6 +134,41 @@ KEELTUBE_MAIL_FROM="KeelTube <no-reply@example.com>"
 
 Use `KEELTUBE_SMTP_SECURITY=ssl` for implicit TLS on port 465, or `none` for a local relay. SMTP
 requires both the username and password.
+
+
+## Social sign-in
+
+Social sign-in is disabled unless a provider client ID is configured. Google and Apple use OIDC ID
+token verification against the provider JWKS; X uses OAuth 2.0 with PKCE and the X user-info
+endpoint. Authorization state is stored server-side and is single-use, so a callback cannot be
+replayed. Accounts created from a provider have no password; verified provider emails link to an
+existing password account, while unverified or missing emails never claim another account and use a
+synthetic local address.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/auth/social/providers` | List configured providers |
+| `GET` | `/api/v1/auth/social/{provider}/start` | Start sign-in and redirect to the provider |
+| `GET` | `/api/v1/auth/social/{provider}/callback` | Complete a query-string callback |
+| `POST` | `/api/v1/auth/social/{provider}/callback` | Complete an Apple `form_post` callback |
+
+`start` accepts `return_to` for a same-origin path and returns a provider redirect. Add
+`format=json` to receive `{"authorization_url": "...", "expires_at": "..."}` instead. Callbacks set
+the normal session and CSRF cookies and redirect back to `KEELTUBE_APP_URL` plus `return_to`, or
+return the session JSON when `format=json` is supplied. Register these callback URLs with each
+provider:
+
+```text
+http://localhost:8080/api/v1/auth/social/google/callback
+http://localhost:8080/api/v1/auth/social/apple/callback
+http://localhost:8080/api/v1/auth/social/x/callback
+```
+
+Set `KEELTUBE_SOCIAL_CALLBACK_BASE_URL` to the public core origin in non-local deployments. Apple
+requires either `KEELTUBE_APPLE_CLIENT_SECRET` or all of `KEELTUBE_APPLE_TEAM_ID`,
+`KEELTUBE_APPLE_KEY_ID`, and the private key. Provider endpoints and claim names can be overridden
+with `KEELTUBE_<PROVIDER>_ISSUER`, `_AUTH_URL`, `_TOKEN_URL`, `_JWKS_URL`, `_USERINFO_URL`,
+`_SCOPES`, `_EMAIL_CLAIM`, `_SUBJECT_CLAIM`, `_NAME_CLAIM`, and `_AVATAR_CLAIM`.
 
 ## Run locally
 
@@ -146,6 +202,15 @@ go test -p 1 ./...
 The CI workflow starts a PostgreSQL service automatically. Without the environment variable, the
 database tests skip.
 
+## Search
+
+`GET /api/v1/search` is catalog search and accepts `channel_id`. `GET /api/v1/search/semantic`
+embeds the query with the discovery embedder and ranks public videos with pgvector. When
+`KEELTUBE_RERANKER_URL` is set, semantic results are reranked by an external cross-encoder; otherwise
+a deterministic lexical reranker is used. The reranker receives
+`{"query":"...","documents":["..."]}` and returns `{"scores":[0.0]}` with one score per document. `GET /api/v1/search/suggestions` returns compact video,
+short, and channel suggestions. `GET /api/v1/channels?ids=...` supports bulk channel lookup.
+
 ## Discovery
 
 `GET /api/v1/feed` personalizes when the request carries a session and the viewer has signals.
@@ -170,6 +235,10 @@ matching migration.
 
 The private dev stack builds and runs core, the seed, embeddings, moderation, PostgreSQL, and an
 optional media worker. Supply the database and mail settings through the stack's environment file.
+
+Removed videos return `410 Gone` with a canonical `video` tombstone that omits playback URLs but
+keeps the metadata needed to render the removal notice. Private videos return `404` unless the
+caller owns the channel.
 
 ## Engagement
 
@@ -259,6 +328,46 @@ Set `KEELTUBE_MODERATION_TOKEN` instead only when moderation runs in legacy role
 be the creator-role token. Leave the URL unset to keep the gateway disabled; the endpoints then
 return `503`.
 
+Cases and actions accept an optional `video_id` filter so the creator app can load the record for
+one video without fetching the whole channel record.
+
+## Federation
+
+Set `KEELTUBE_FEDERATION_DOMAIN` to enable the ActivityPub v0.1 surface. Core serves WebFinger,
+ActivityPub actor/outbox/followers/following documents, PeerTube-compatible video objects, a signed
+instance policy, and a signed inbox. Outbound activities are queued in PostgreSQL and delivered with
+RSA-SHA256 HTTP Signatures. Inbound Follow/Undo/Accept/Reject/Create/Update/Delete/Flag activities
+are verified, deduplicated, and applied; remote videos are imported into the catalog only after the
+instance follows and the peer accepts.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/.well-known/webfinger` | Resolve `acct:handle@domain` |
+| `GET` | `/federation/actors/{id}` | Actor document and public key |
+| `GET` | `/federation/actors/{id}/outbox` | Local public videos as Create activities |
+| `GET` | `/federation/actors/{id}/followers` | Followers collection |
+| `GET` | `/federation/actors/{id}/following` | Following collection |
+| `POST` | `/federation/actors/{id}/inbox` | Signed inbox |
+| `GET` | `/federation/videos/{id}` | PeerTube-compatible video object |
+| `GET` | `/federation/policy` | Signed instance policy |
+
+Internal operator routes under `/internal/v1/federation` require `KEELTUBE_INTERNAL_TOKEN` and let
+operators inspect the instance, follow or unfollow a remote actor, block/unblock a peer, and process
+the delivery queue. Configure `KEELTUBE_FEDERATION_BASE_URL` when the public origin differs from
+`https://<domain>`.
+
+## Viewer reports
+
+`POST /api/v1/reports` accepts `{"subject_type":"video|channel","subject_id":"...","reason":"...",
+"details":"..."}`. Core persists the report, resolves the subject, derives its channel, and
+forwards the report to `keel-moderation` as a `user_report` signal using
+`KEELTUBE_MODERATION_SIGNAL_TOKEN`. Reports are signals, not decisions. The route is rate-limited by
+client IP and does not require a session. Signed-in reporters can read their own report status with
+`GET /api/v1/reports/{id}` and `GET /api/v1/me/reports`.
+
+`GET /api/v1/videos/{id}/trust` returns the public creator-safe moderation record for a video.
+Moderation events are pushed into the creator notification feed through the internal ingest route.
+
 For the claims path, configure both services with the same 32+ character secret:
 
 ```sh
@@ -274,6 +383,20 @@ KEELTUBE_OIDC_AUDIENCE=keel-moderation
 KEELTUBE_OIDC_HMAC_SECRET=replace-with-at-least-32-characters
 KEELTUBE_OIDC_ALGORITHMS=HS256
 ```
+
+## Finance (read-only demo)
+
+The devstack seeds a read-only finance record for the demo channel. These endpoints are
+session-authenticated and channel-scoped:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/studio/monetization` | Eligibility, RPM, holdback, balance, next payout |
+| `GET` | `/api/v1/studio/earnings` | Paginated earnings ledger |
+| `GET` | `/api/v1/studio/payouts` | Paginated payout history |
+
+Real billing, settlement, and payout execution are future work. `GET /api/v1/studio/stats` includes
+the current balance as `revenue`.
 
 ## Watch telemetry and creator analytics
 
@@ -362,10 +485,21 @@ gateway and become the video's `captions_url` when finalized.
 | `POST` | `/api/v1/studio/videos/{id}/subtitles` | Create a presigned subtitle upload |
 | `POST` | `/api/v1/studio/videos/{id}/subtitles/{track_id}/complete` | Finalize a subtitle track |
 | `DELETE` | `/api/v1/studio/videos/{id}/subtitles/{track_id}` | Delete a subtitle track |
-| `GET` | `/api/v1/studio/stats` | Own-channel counts, views, likes, comments, recent uploads |
+| `GET` | `/api/v1/studio/stats` | Own-channel counts, views, likes, comments, revenue, recent uploads |
 | `POST` | `/api/v1/studio/uploads` | Create a multipart upload intent and presigned part URLs |
 | `GET` | `/api/v1/studio/uploads/{id}` | Poll upload, scan, and processing status |
+| `GET` | `/api/v1/studio/uploads` | List own upload intents (`status`, `limit`, `offset`) |
 | `GET` | `/api/v1/studio/uploads/{id}/scans` | Read copyright/policy scan findings |
+| `GET` | `/api/v1/studio/comments` | List comments across own videos for export |
+| `POST` | `/api/v1/studio/comments/{id}/pin` | Pin a top-level comment |
+| `DELETE` | `/api/v1/studio/comments/{id}/pin` | Unpin a comment |
+| `DELETE` | `/api/v1/studio/comments/{id}` | Remove a comment and its replies |
+| `PATCH` | `/api/v1/studio/channel` | Update name, description, avatar, banner, links |
+| `DELETE` | `/api/v1/studio/videos/{id}` | Archive a video |
+| `POST` | `/api/v1/studio/videos/{id}/restore` | Restore an archived video as a draft |
+| `POST` | `/api/v1/studio/videos/{id}/purge` | Irreversibly delete an archived video and all media objects |
+| `POST` | `/api/v1/studio/videos/{id}/schedule` | Schedule a future publish |
+| `DELETE` | `/api/v1/studio/videos/{id}/schedule` | Clear a scheduled publish |
 | `POST` | `/api/v1/studio/uploads/{id}/parts` | Refresh presigned part URLs for a long upload |
 | `POST` | `/api/v1/studio/uploads/{id}/complete` | Complete multipart upload and enqueue scanning |
 | `DELETE` | `/api/v1/studio/uploads/{id}` | Abort an in-progress upload |
@@ -403,6 +537,9 @@ counters, policy versions, content hashes, or public IDs.
    repoints the URL to the next ready track or embedded captions.
 9. Custom thumbnails use `POST /studio/videos/{id}/thumbnail` and the matching `complete` endpoint.
    Completion verifies the image decodes as JPEG/PNG and updates the thumbnail media asset.
+10. `POST /studio/videos/{id}/purge` permanently deletes an archived video. It rejects videos with
+    running media jobs or active uploads, deletes the entire channel/video object prefix (including
+    HLS segments), removes the database rows, and records an audit row in `media_purges`.
 
 HLS renditions are selected up to `KEELTUBE_MEDIA_MAX_RENDITION_HEIGHT` and never upscaled. The
 processor runs ffmpeg/ffprobe without a shell, limits source size and duration, writes scratch files
@@ -433,11 +570,9 @@ Provider errors are not treated as approval; the job retries and eventually fail
 
 ## Next
 
-1. Replace the dev fallback with full OIDC behind the same authenticator interface.
-2. Connect approved Google, Apple, and X providers.
-3. Add direct OIDC token forwarding for non-core moderation clients.
-4. Add report ingestion to the moderation service, not core.
-5. Add server-signed creator export bundles and monetization/payout integration.
+1. Add direct OIDC token forwarding for non-core moderation clients.
+2. Add server-signed creator export bundles and monetization/payout integration.
+3. Add production classifier models and public transparency aggregates.
 
 ## Licensing
 

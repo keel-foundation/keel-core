@@ -31,6 +31,7 @@ type fakeStorage struct {
 	objects      map[string][]byte
 	sizes        map[string]int64
 	contentTypes map[string]string
+	prefixes     []string
 }
 
 func (f *fakeStorage) CreateMultipartUpload(_ context.Context, key, contentType string) (string, error) {
@@ -99,6 +100,11 @@ func (f *fakeStorage) PresignGetObject(_ context.Context, key string, _ time.Dur
 
 func (f *fakeStorage) DeleteObject(_ context.Context, _ string) error {
 	f.deleted++
+	return nil
+}
+
+func (f *fakeStorage) DeletePrefix(_ context.Context, prefix string) error {
+	f.prefixes = append(f.prefixes, prefix)
 	return nil
 }
 

@@ -162,18 +162,6 @@ func (s *Server) ingestNotification(w http.ResponseWriter, r *http.Request) {
 		writeNotificationError(w, err)
 		return
 	}
-	actor, err := s.store.GetActor(r.Context(), body.ActorID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"detail": "actor_id does not identify a known actor.",
-			"field":  "actor_id",
-		})
-		return
-	}
-	if err != nil {
-		writeNotificationError(w, err)
-		return
-	}
 	if body.ChannelID != "" {
 		channel, err := s.store.GetChannel(r.Context(), body.ChannelID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -187,13 +175,33 @@ func (s *Server) ingestNotification(w http.ResponseWriter, r *http.Request) {
 			writeNotificationError(w, err)
 			return
 		}
-		if channel.ActorID != actor.ID {
+		if body.ActorID == "" {
+			body.ActorID = channel.ActorID
+		}
+		if channel.ActorID != body.ActorID {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
 				"detail": "channel_id is not owned by actor_id.",
 				"field":  "channel_id",
 			})
 			return
 		}
+	}
+	if body.ActorID == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"detail": "actor_id or channel_id is required.",
+			"field":  "actor_id",
+		})
+		return
+	}
+	if _, err := s.store.GetActor(r.Context(), body.ActorID); errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"detail": "actor_id does not identify a known actor.",
+			"field":  "actor_id",
+		})
+		return
+	} else if err != nil {
+		writeNotificationError(w, err)
+		return
 	}
 	input := store.NotificationInput{
 		ActorID:   body.ActorID,

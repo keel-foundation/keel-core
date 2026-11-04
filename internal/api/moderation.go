@@ -95,7 +95,8 @@ func (s *Server) moderationCases(w http.ResponseWriter, r *http.Request) {
 		writeStudioError(w, err)
 		return
 	}
-	response, err := service.ListCases(r.Context(), moderationIdentity(principal), channel.ID, status, limit, offset)
+	videoID := strings.TrimSpace(r.URL.Query().Get("video_id"))
+	response, err := service.ListCases(r.Context(), moderationIdentity(principal), channel.ID, status, videoID, limit, offset)
 	if err != nil {
 		writeModerationError(w, err)
 		return
@@ -134,7 +135,8 @@ func (s *Server) moderationActions(w http.ResponseWriter, r *http.Request) {
 		writeStudioError(w, err)
 		return
 	}
-	response, err := service.ListActions(r.Context(), moderationIdentity(principal), channel.ID, status, limit, offset)
+	videoID := strings.TrimSpace(r.URL.Query().Get("video_id"))
+	response, err := service.ListActions(r.Context(), moderationIdentity(principal), channel.ID, status, videoID, limit, offset)
 	if err != nil {
 		writeModerationError(w, err)
 		return

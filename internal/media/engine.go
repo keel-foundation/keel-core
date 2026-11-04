@@ -85,6 +85,7 @@ type Engine struct {
 	processor  Processor
 	OnPublish  func(context.Context, string) error
 	OnFailure  func(context.Context, string, string) error
+	OnScan     func(context.Context, store.Video, string, string, []Finding, string) error
 	workerName string
 }
 
@@ -1025,6 +1026,7 @@ func (e *Engine) blockUpload(ctx context.Context, upload store.UploadIntent, vid
 		return err
 	}
 	reason := findingsSummary(findings)
+	e.reportScan(ctx, video, VerdictBlock, scanner, findings, reason)
 	now := time.Now().UTC()
 	if err := e.store.RecordMediaScan(ctx, store.MediaScan{
 		UploadID:      upload.ID,
@@ -1114,6 +1116,9 @@ func (e *Engine) processJob(ctx context.Context, job store.MediaJob) error {
 	}
 	if result.Verdict == VerdictBlock {
 		return e.blockUpload(ctx, upload, video, result.Scanner, result.Findings, digest, size)
+	}
+	if result.Verdict == VerdictReview {
+		e.reportScan(ctx, video, VerdictReview, result.Scanner, result.Findings, findingsSummary(result.Findings))
 	}
 	findingsJSON, err := json.Marshal(result.Findings)
 	if err != nil {
@@ -1394,4 +1399,79 @@ func normalizeContentType(value string) string {
 		value = strings.TrimSpace(value[:index])
 	}
 	return value
+}
+
+func (e *Engine) reportScan(
+	ctx context.Context,
+	video store.Video,
+	verdict, scanner string,
+	findings []Finding,
+	reason string,
+) {
+	if e.OnScan == nil {
+		return
+	}
+	if err := e.OnScan(ctx, video, verdict, scanner, findings, reason); err != nil {
+		log.Printf("media scan callback for %s: %v", video.ID, err)
+	}
+}
+
+var ErrPurgeUnsupported = errors.New("media storage does not support prefix deletion")
+
+// PurgeVideo irreversibly destroys a creator-owned, archived video and all of
+// its media objects. The database rows are removed only after object storage
+// succeeds, so a transient storage failure leaves the archived record intact
+// and the purge can be retried.
+func (e *Engine) PurgeVideo(ctx context.Context, channelID, actorID, videoID string) error {
+	plan, err := e.store.PrepareVideoPurge(ctx, channelID, videoID)
+	if err != nil {
+		return err
+	}
+	deleter, ok := e.storage.(PrefixDeleter)
+	if !ok {
+		return ErrPurgeUnsupported
+	}
+	baseKey := e.videoBaseKey(plan.Video.ChannelID, plan.Video.ID)
+	keys := make(map[string]struct{})
+	for _, asset := range plan.Assets {
+		if asset.ObjectKey != "" {
+			keys[asset.ObjectKey] = struct{}{}
+		}
+	}
+	for _, track := range plan.Subtitles {
+		if track.ObjectKey != "" {
+			keys[track.ObjectKey] = struct{}{}
+		}
+	}
+	for _, upload := range plan.Uploads {
+		if upload.ObjectKey != "" {
+			keys[upload.ObjectKey] = struct{}{}
+		}
+	}
+
+	if err := deleter.DeletePrefix(ctx, baseKey+"/"); err != nil {
+		return err
+	}
+	for key := range keys {
+		if strings.HasPrefix(key, baseKey+"/") {
+			continue
+		}
+		if err := e.storage.DeleteObject(ctx, key); err != nil {
+			return err
+		}
+	}
+	if err := e.store.DeletePurgedVideo(ctx, plan.Video.ChannelID, plan.Video.ID); err != nil {
+		return err
+	}
+	if err := e.store.RecordMediaPurge(ctx, store.MediaPurge{
+		VideoID:     plan.Video.ID,
+		PublicID:    plan.Video.PublicID,
+		ChannelID:   plan.Video.ChannelID,
+		ActorID:     actorID,
+		ObjectCount: len(keys),
+		PurgedAt:    time.Now().UTC(),
+	}); err != nil {
+		log.Printf("media purge audit for %s: %v", plan.Video.ID, err)
+	}
+	return nil
 }

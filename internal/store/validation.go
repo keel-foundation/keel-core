@@ -4,7 +4,7 @@ var Licenses = []string{"standard", "cc-by", "cc-by-sa", "cc0", "all-rights-rese
 
 var Visibilities = []string{"public", "unlisted", "private"}
 
-var VideoStatuses = []string{"draft", "processing", "published", "removed", "demonetized"}
+var VideoStatuses = []string{"draft", "processing", "published", "removed", "demonetized", "archived"}
 
 func ValidVisibility(value string) bool {
 	return contains(Visibilities, value)

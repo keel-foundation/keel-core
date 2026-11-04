@@ -285,3 +285,143 @@ func (s *Store) UnlikeComment(ctx context.Context, commentID, actorID string) (i
 	}
 	return likes, false, nil
 }
+
+func (s *Store) ListStudioComments(ctx context.Context, channelID string, limit, offset int) ([]Comment, int, error) {
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM comments c
+		JOIN videos v ON v.id = c.video_id
+		WHERE v.channel_id = $1 AND c.status = 'visible'
+	`, channelID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.video_id, c.parent_id, c.actor_id, a.display_name, a.handle,
+		       COALESCE(ch.avatar_url, ''), c.body, c.likes_count, c.pinned,
+		       c.status, c.created_at, c.updated_at
+		FROM comments c
+		JOIN videos v ON v.id = c.video_id
+		JOIN actors a ON a.id = c.actor_id
+		LEFT JOIN channels ch ON ch.id = (
+			SELECT id FROM channels WHERE actor_id = a.id ORDER BY created_at ASC LIMIT 1
+		)
+		WHERE v.channel_id = $1 AND c.status = 'visible'
+		ORDER BY c.created_at DESC, c.id DESC
+		LIMIT $2 OFFSET $3
+	`, channelID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	comments := make([]Comment, 0, limit)
+	for rows.Next() {
+		comment, err := scanComment(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		comments = append(comments, comment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return comments, total, nil
+}
+
+func (s *Store) SetCommentPinned(
+	ctx context.Context,
+	channelID, commentID string,
+	pinned bool,
+	at time.Time,
+) (Comment, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Comment{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var videoID string
+	var parentID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT c.video_id, c.parent_id
+		FROM comments c
+		JOIN videos v ON v.id = c.video_id
+		WHERE c.id = $1 AND v.channel_id = $2 AND c.status = 'visible'
+		FOR UPDATE
+	`, commentID, channelID).Scan(&videoID, &parentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Comment{}, ErrNotFound
+	}
+	if err != nil {
+		return Comment{}, err
+	}
+	if parentID.Valid {
+		return Comment{}, ErrInvalidInput
+	}
+	if pinned {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE comments SET pinned = FALSE, updated_at = $2
+			WHERE video_id = $1 AND pinned = TRUE AND id <> $3
+		`, videoID, at, commentID); err != nil {
+			return Comment{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE comments SET pinned = $2, updated_at = $3 WHERE id = $1
+	`, commentID, pinned, at); err != nil {
+		return Comment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Comment{}, err
+	}
+	return s.GetComment(ctx, commentID)
+}
+
+func (s *Store) RemoveComment(ctx context.Context, channelID, commentID string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var videoID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT c.video_id
+		FROM comments c
+		JOIN videos v ON v.id = c.video_id
+		WHERE c.id = $1 AND v.channel_id = $2
+		FOR UPDATE
+	`, commentID, channelID).Scan(&videoID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	var visible int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM comments
+		WHERE (id = $1 OR parent_id = $1) AND status = 'visible'
+	`, commentID).Scan(&visible); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE comments
+		SET status = 'removed', pinned = FALSE, updated_at = $2
+		WHERE id = $1 OR parent_id = $1
+	`, commentID, at); err != nil {
+		return err
+	}
+	if visible > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE videos
+			SET comments_count = GREATEST(comments_count - $2, 0)
+			WHERE id = $1
+		`, videoID, visible); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

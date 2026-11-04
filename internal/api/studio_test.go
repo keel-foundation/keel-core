@@ -218,6 +218,8 @@ func (fakeStudioMedia) PresignGet(_ context.Context, key string) (string, error)
 	return "https://storage.example/" + key, nil
 }
 
+func (fakeStudioMedia) PurgeVideo(context.Context, string, string, string) error { return nil }
+
 func (fakeStudioMedia) GetObject(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("#EXTM3U\n")), nil
 }

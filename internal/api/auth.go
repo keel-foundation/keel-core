@@ -8,6 +8,7 @@ import (
 
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/identity"
+	"github.com/keel-foundation/keel-core/internal/store"
 )
 
 type registerRequest struct {
@@ -33,6 +34,11 @@ type forgotPasswordRequest struct {
 type resetPasswordRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +209,58 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	var body changePasswordRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.identity.ChangePassword(
+		r.Context(),
+		s.identity.SessionToken(r),
+		body.CurrentPassword,
+		body.NewPassword,
+		requestMeta(r, s.trustProxy),
+	); err != nil {
+		s.writeIdentityError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := s.identity.ListSessions(r.Context(), s.identity.SessionToken(r))
+	if err != nil {
+		s.writeIdentityError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": sessions})
+}
+
+func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
+	if err := s.identity.RevokeSession(
+		r.Context(),
+		s.identity.SessionToken(r),
+		r.PathValue("id"),
+		requestMeta(r, s.trustProxy),
+	); err != nil {
+		s.writeIdentityError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	if err := s.identity.RevokeOtherSessions(
+		r.Context(),
+		s.identity.SessionToken(r),
+		requestMeta(r, s.trustProxy),
+	); err != nil {
+		s.writeIdentityError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) writeSession(w http.ResponseWriter, result identity.SessionResult) {
 	s.identity.WriteSessionCookies(w, result)
 	writeJSON(w, http.StatusOK, result)
@@ -240,6 +298,12 @@ func (s *Server) writeIdentityError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"detail": "That reset link is invalid or expired.",
 		})
+	case errors.Is(err, identity.ErrInvalidPassword):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"detail": "Current password is incorrect.",
+		})
+	case errors.Is(err, store.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not found"})
 	case errors.Is(err, auth.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
 			"detail": "No active session.",

@@ -25,14 +25,17 @@ const (
 // ErrDisabled reports that no moderation service is configured.
 var ErrDisabled = errors.New("moderation service is not configured")
 
+// ErrSignalTokenMissing reports that viewer-report ingestion has no service credential.
+var ErrSignalTokenMissing = errors.New("moderation signal token is not configured")
+
 // Service is the creator-scoped moderation surface used by the gateway. It is an
 // interface so tests and alternate transports can substitute an implementation.
 type Service interface {
 	Enabled() bool
 	Summary(ctx context.Context, identity Identity, channelID string) (*Response, error)
-	ListCases(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error)
+	ListCases(ctx context.Context, identity Identity, channelID, status, videoID string, limit, offset int) (*Response, error)
 	GetCase(ctx context.Context, identity Identity, channelID, caseID string) (*Response, error)
-	ListActions(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error)
+	ListActions(ctx context.Context, identity Identity, channelID, status, videoID string, limit, offset int) (*Response, error)
 	GetAction(ctx context.Context, identity Identity, channelID, actionID string) (*Response, error)
 	ListAppeals(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error)
 	GetAppeal(ctx context.Context, identity Identity, channelID, appealID string) (*Response, error)
@@ -40,6 +43,8 @@ type Service interface {
 	VerifyLedger(ctx context.Context, identity Identity, channelID string) (*Response, error)
 	ExportLedger(ctx context.Context, identity Identity, channelID, format string) (*Response, error)
 	FileAppeal(ctx context.Context, identity Identity, channelID, actionID, grounds, statement string) (*Response, error)
+	Report(ctx context.Context, channelID, subjectType, subjectID, reason, details, reporterID string) (*Response, error)
+	PublicVideoRecord(ctx context.Context, videoID string) (*Response, error)
 }
 
 // Response is a successful moderation response. The gateway forwards only the
@@ -64,10 +69,11 @@ func (e *Error) Error() string {
 // Client calls the creator-scoped moderation endpoints with a server-side
 // service credential. The browser never receives this credential.
 type Client struct {
-	baseURL string
-	token   string
-	claims  claimsConfig
-	client  *http.Client
+	baseURL     string
+	token       string
+	signalToken string
+	claims      claimsConfig
+	client      *http.Client
 }
 
 // NewClient constructs a moderation client. An empty base URL leaves the client
@@ -87,14 +93,25 @@ func (c *Client) Enabled() bool {
 	return c != nil && c.baseURL != ""
 }
 
+// WithSignalToken enables server-to-server viewer-report ingestion. It is a
+// separate credential from creator gateway claims and must match moderation's
+// KEELTUBE_SIGNAL_INGEST_TOKEN.
+func (c *Client) WithSignalToken(token string) *Client {
+	if c == nil {
+		return c
+	}
+	c.signalToken = strings.TrimSpace(token)
+	return c
+}
+
 func (c *Client) Summary(ctx context.Context, identity Identity, channelID string) (*Response, error) {
 	return c.do(ctx, http.MethodGet, "/v1/creator/summary", creatorQuery(channelID), identity, channelID, nil)
 }
 
-func (c *Client) ListCases(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error) {
+func (c *Client) ListCases(ctx context.Context, identity Identity, channelID, status, videoID string, limit, offset int) (*Response, error) {
 	return c.do(
 		ctx, http.MethodGet, "/v1/creator/cases",
-		listQuery(channelID, status, limit, offset), identity, channelID, nil,
+		listQuery(channelID, status, videoID, limit, offset), identity, channelID, nil,
 	)
 }
 
@@ -105,10 +122,10 @@ func (c *Client) GetCase(ctx context.Context, identity Identity, channelID, case
 	)
 }
 
-func (c *Client) ListActions(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error) {
+func (c *Client) ListActions(ctx context.Context, identity Identity, channelID, status, videoID string, limit, offset int) (*Response, error) {
 	return c.do(
 		ctx, http.MethodGet, "/v1/creator/actions",
-		listQuery(channelID, status, limit, offset), identity, channelID, nil,
+		listQuery(channelID, status, videoID, limit, offset), identity, channelID, nil,
 	)
 }
 
@@ -122,7 +139,7 @@ func (c *Client) GetAction(ctx context.Context, identity Identity, channelID, ac
 func (c *Client) ListAppeals(ctx context.Context, identity Identity, channelID, status string, limit, offset int) (*Response, error) {
 	return c.do(
 		ctx, http.MethodGet, "/v1/creator/appeals",
-		listQuery(channelID, status, limit, offset), identity, channelID, nil,
+		listQuery(channelID, status, "", limit, offset), identity, channelID, nil,
 	)
 }
 
@@ -158,19 +175,72 @@ func (c *Client) FileAppeal(ctx context.Context, identity Identity, channelID, a
 	)
 }
 
+func (c *Client) PublicVideoRecord(ctx context.Context, videoID string) (*Response, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	return c.doWithToken(
+		ctx,
+		http.MethodGet,
+		"/v1/public/videos/"+url.PathEscape(videoID)+"/record",
+		nil,
+		"",
+		nil,
+	)
+}
+
+func (c *Client) Report(
+	ctx context.Context,
+	channelID, subjectType, subjectID, reason, details, reporterID string,
+) (*Response, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	if strings.TrimSpace(c.signalToken) == "" {
+		return nil, ErrSignalTokenMissing
+	}
+	return c.doWithToken(
+		ctx,
+		http.MethodPost,
+		"/v1/signals",
+		nil,
+		c.signalToken,
+		signalRequest{
+			SubjectType: subjectType,
+			SubjectID:   subjectID,
+			ChannelID:   channelID,
+			Reason:      reason,
+			Details:     details,
+			ReporterID:  reporterID,
+		},
+	)
+}
+
 type appealRequest struct {
 	Grounds   string `json:"grounds"`
 	Statement string `json:"statement"`
+}
+
+type signalRequest struct {
+	SubjectType string `json:"subject_type"`
+	SubjectID   string `json:"subject_id"`
+	ChannelID   string `json:"channel_id"`
+	Reason      string `json:"reason"`
+	Details     string `json:"details"`
+	ReporterID  string `json:"reporter_id,omitempty"`
 }
 
 func creatorQuery(channelID string) url.Values {
 	return url.Values{"channel_id": []string{channelID}}
 }
 
-func listQuery(channelID, status string, limit, offset int) url.Values {
+func listQuery(channelID, status, videoID string, limit, offset int) url.Values {
 	query := creatorQuery(channelID)
 	if status != "" {
 		query.Set("status", status)
+	}
+	if videoID != "" {
+		query.Set("video_id", videoID)
 	}
 	query.Set("limit", strconv.Itoa(limit))
 	query.Set("offset", strconv.Itoa(offset))
@@ -183,6 +253,27 @@ func (c *Client) do(
 	query url.Values,
 	identity Identity,
 	channelID string,
+	body any,
+) (*Response, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	token := c.token
+	if c.claimsEnabled() {
+		var err error
+		token, err = c.signClaims(identity, channelID, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.doWithToken(ctx, method, path, query, token, body)
+}
+
+func (c *Client) doWithToken(
+	ctx context.Context,
+	method, path string,
+	query url.Values,
+	token string,
 	body any,
 ) (*Response, error) {
 	if !c.Enabled() {
@@ -210,14 +301,6 @@ func (c *Client) do(
 	request.Header.Set("Accept", "application/json, text/csv, application/x-ndjson")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
-	}
-
-	token := c.token
-	if c.claimsEnabled() {
-		token, err = c.signClaims(identity, channelID, time.Now().UTC())
-		if err != nil {
-			return nil, err
-		}
 	}
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)

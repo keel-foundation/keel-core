@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -210,6 +211,31 @@ func TestCatalogVideoVisibility(t *testing.T) {
 	}
 	if got := removed.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("unexpected removed video cache header: %q", got)
+	}
+	removedBody := decode[struct {
+		Detail string `json:"detail"`
+		Video  struct {
+			ID          string `json:"id"`
+			Status      string `json:"status"`
+			ContentHash string `json:"content_hash"`
+		} `json:"video"`
+	}](t, removed)
+	if removedBody.Video.ID != "vid_removed_001" || removedBody.Video.Status != "removed" {
+		t.Fatalf("unexpected removed tombstone: %+v", removedBody)
+	}
+	if removedBody.Video.ContentHash == "" {
+		t.Fatalf("removed tombstone must keep the content hash: %+v", removedBody.Video)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(removed.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode removed body: %v", err)
+	}
+	tombstone, ok := raw["video"].(map[string]any)
+	if !ok {
+		t.Fatalf("removed body has no video object: %v", raw)
+	}
+	if _, present := tombstone["playback"]; present {
+		t.Fatalf("removed tombstone must not expose playback: %v", tombstone)
 	}
 	if rec := catalogGet(t, handler, "/api/v1/videos/fG5hIj7kLmN", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("draft video anonymous: expected 404, got %d", rec.Code)

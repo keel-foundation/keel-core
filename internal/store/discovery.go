@@ -66,13 +66,13 @@ func ParseVector(value string) ([]float32, error) {
 func scanVideoWithExtras(scanner rowScanner, extras ...any) (Video, error) {
 	var video Video
 	var playbackJSON, policyJSON, tagsJSON []byte
-	var publishedAt sql.NullTime
+	var publishedAt, scheduledAt, archivedAt sql.NullTime
 	destinations := []any{
 		&video.ID, &video.PublicID, &video.ChannelID, &video.Title, &video.Description,
 		&video.Status, &video.Visibility, &video.ContentHash, &video.DurationSeconds,
 		&playbackJSON, &video.License, &policyJSON, &video.Format, &video.Category,
 		&tagsJSON, &video.Views, &video.Likes, &video.CommentsCount, &video.CreatedAt,
-		&publishedAt, &video.UpdatedAt,
+		&publishedAt, &scheduledAt, &archivedAt, &video.UpdatedAt,
 	}
 	destinations = append(destinations, extras...)
 	if err := scanner.Scan(destinations...); err != nil {
@@ -98,6 +98,12 @@ func scanVideoWithExtras(scanner rowScanner, extras ...any) (Video, error) {
 	}
 	if publishedAt.Valid {
 		video.PublishedAt = &publishedAt.Time
+	}
+	if scheduledAt.Valid {
+		video.ScheduledAt = &scheduledAt.Time
+	}
+	if archivedAt.Valid {
+		video.ArchivedAt = &archivedAt.Time
 	}
 	return video, nil
 }
@@ -285,6 +291,16 @@ func (s *Store) ListActorSignals(ctx context.Context, actorID string, limit int)
 			FROM saved_videos sv
 			JOIN videos v ON v.id = sv.video_id
 			WHERE sv.actor_id = $1
+			UNION ALL
+			SELECT 'comment', c.video_id, v.title, v.category, c.created_at
+			FROM comments c
+			JOIN videos v ON v.id = c.video_id
+			WHERE c.actor_id = $1 AND c.status = 'visible'
+			UNION ALL
+			SELECT 'click', de.video_id, v.title, v.category, de.occurred_at
+			FROM discovery_events de
+			JOIN videos v ON v.id = de.video_id
+			WHERE de.viewer_key = 'actor:' || $1 AND de.event_type = 'click'
 		) signals
 		ORDER BY at DESC
 		LIMIT $2
@@ -397,4 +413,70 @@ func (s *Store) NearestVideos(
 		return nil, err
 	}
 	return videos, nil
+}
+
+func (s *Store) SemanticSearchVideos(
+	ctx context.Context,
+	vector []float32,
+	model, channelID, format string,
+	limit, offset int,
+) ([]VideoSimilarity, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	args := []any{VectorLiteral(vector), model}
+	clauses := []string{
+		"$1::text IS NOT NULL",
+		"e.model = $2",
+		"v.status IN ('published', 'demonetized')",
+		"v.visibility = 'public'",
+	}
+	if channelID != "" {
+		args = append(args, channelID)
+		clauses = append(clauses, fmt.Sprintf("v.channel_id = $%d", len(args)))
+	}
+	if format != "" {
+		args = append(args, format)
+		clauses = append(clauses, fmt.Sprintf("v.format = $%d", len(args)))
+	}
+	where := strings.Join(clauses, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM videos v
+		JOIN video_embeddings e ON e.video_id = v.id
+		WHERE `+where, args...,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	dataArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+videoColumnsV+`, 1 - (e.embedding <=> $1::vector) AS similarity
+		FROM videos v
+		JOIN video_embeddings e ON e.video_id = v.id
+		WHERE `+where+`
+		ORDER BY e.embedding <=> $1::vector
+		LIMIT $`+fmt.Sprint(len(args)+1)+` OFFSET $`+fmt.Sprint(len(args)+2),
+		dataArgs...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	videos := make([]VideoSimilarity, 0, limit)
+	for rows.Next() {
+		var similarity float64
+		video, err := scanVideoWithExtras(rows, &similarity)
+		if err != nil {
+			return nil, 0, err
+		}
+		videos = append(videos, VideoSimilarity{Video: video, Similarity: similarity})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return videos, total, nil
 }

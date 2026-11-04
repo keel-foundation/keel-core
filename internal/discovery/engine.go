@@ -822,6 +822,10 @@ func signalWeight(signal store.ActorSignal, now time.Time) float64 {
 		return 1.5 * math.Exp(-ageDays/60)
 	case "save":
 		return 1.25 * math.Exp(-ageDays/60)
+	case "comment":
+		return 0.9 * math.Exp(-ageDays/30)
+	case "click":
+		return 0.7 * math.Exp(-ageDays/14)
 	default:
 		return 0
 	}
@@ -1052,4 +1056,31 @@ func normalize(vector []float64) []float32 {
 		result[index] = float32(value / norm)
 	}
 	return result
+}
+
+func (e *Engine) EmbeddingModel() string {
+	if e == nil || e.embedder == nil {
+		return ""
+	}
+	return e.embedder.Model()
+}
+
+func (e *Engine) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	if e == nil || e.embedder == nil {
+		return nil, fmt.Errorf("discovery embedder is not configured")
+	}
+	vectors, err := e.embedder.Embed(ctx, []string{text}, InputTypeQuery)
+	if err != nil {
+		return nil, err
+	}
+	if len(vectors) != 1 {
+		return nil, fmt.Errorf("embedder returned %d vectors for one query", len(vectors))
+	}
+	if len(vectors[0]) != e.embedder.Dimensions() {
+		return nil, fmt.Errorf(
+			"embedder returned %d dimensions; expected %d",
+			len(vectors[0]), e.embedder.Dimensions(),
+		)
+	}
+	return vectors[0], nil
 }

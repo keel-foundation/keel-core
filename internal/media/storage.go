@@ -213,3 +213,43 @@ func (s *S3Storage) DeleteObject(ctx context.Context, key string) error {
 	}
 	return nil
 }
+
+// PrefixDeleter is implemented by storage backends that can enumerate and
+// delete every object below a key prefix. Media purge requires this capability
+// so HLS segment trees cannot be left behind.
+type PrefixDeleter interface {
+	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+func (s *S3Storage) DeletePrefix(ctx context.Context, prefix string) error {
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("%w: list objects: %v", ErrStorage, err)
+		}
+		if len(page.Contents) == 0 {
+			continue
+		}
+		objects := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, object := range page.Contents {
+			if object.Key == nil || *object.Key == "" {
+				continue
+			}
+			objects = append(objects, types.ObjectIdentifier{Key: object.Key})
+		}
+		if len(objects) == 0 {
+			continue
+		}
+		if _, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(s.bucket),
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		}); err != nil {
+			return fmt.Errorf("%w: delete prefix objects: %v", ErrStorage, err)
+		}
+	}
+	return nil
+}

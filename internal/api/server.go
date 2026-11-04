@@ -10,6 +10,7 @@ import (
 
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/discovery"
+	"github.com/keel-foundation/keel-core/internal/federation"
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/moderation"
 	"github.com/keel-foundation/keel-core/internal/notifications"
@@ -20,10 +21,13 @@ type Options struct {
 	Store         *store.Store
 	Auth          auth.Authenticator
 	Identity      *identity.Service
+	Social        *identity.SocialService
 	Discovery     *discovery.Engine
+	Reranker      discovery.Reranker
 	Notifications *notifications.Service
 	Moderation    moderation.Service
 	Media         StudioMedia
+	Federation    *federation.Service
 	InternalToken string
 	Origins       []string
 	RateLimit     int
@@ -35,10 +39,13 @@ type Server struct {
 	store         *store.Store
 	auth          auth.Authenticator
 	identity      *identity.Service
+	social        *identity.SocialService
 	discovery     *discovery.Engine
+	reranker      discovery.Reranker
 	notifications *notifications.Service
 	moderation    moderation.Service
 	media         StudioMedia
+	federation    *federation.Service
 	internalToken string
 	limiter       *rateLimiter
 	trustProxy    bool
@@ -57,14 +64,21 @@ func New(options Options) http.Handler {
 	if notificationService == nil && options.Store != nil {
 		notificationService = notifications.New(options.Store)
 	}
+	reranker := options.Reranker
+	if reranker == nil {
+		reranker = discovery.LexicalReranker{}
+	}
 	s := &Server{
 		store:         options.Store,
 		auth:          options.Auth,
 		identity:      options.Identity,
+		social:        options.Social,
 		discovery:     discoveryEngine,
+		reranker:      reranker,
 		notifications: notificationService,
 		moderation:    options.Moderation,
 		media:         options.Media,
+		federation:    options.Federation,
 		internalToken: options.InternalToken,
 		trustProxy:    options.TrustProxy,
 	}
@@ -74,15 +88,27 @@ func New(options Options) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /.well-known/webfinger", s.webfinger)
+	mux.HandleFunc("GET /federation/actors/{id}", s.federationActor)
+	mux.HandleFunc("GET /federation/actors/{id}/outbox", s.federationOutbox)
+	mux.HandleFunc("GET /federation/actors/{id}/followers", s.federationFollowers)
+	mux.HandleFunc("GET /federation/actors/{id}/following", s.federationFollowing)
+	mux.HandleFunc("POST /federation/actors/{id}/inbox", s.federationInbox)
+	mux.HandleFunc("GET /federation/videos/{id}", s.federationVideo)
+	mux.HandleFunc("GET /federation/policy", s.federationPolicy)
 	mux.HandleFunc("GET /api/v1/feed", s.feed)
 	mux.HandleFunc("GET /api/v1/explore", s.explore)
 	mux.HandleFunc("GET /api/v1/videos", s.listVideos)
 	mux.HandleFunc("GET /api/v1/videos/demo", s.demoVideo)
 	mux.HandleFunc("GET /api/v1/videos/{id}", s.getVideo)
 	mux.HandleFunc("GET /api/v1/videos/{id}/related", s.relatedVideos)
+	mux.HandleFunc("GET /api/v1/videos/{id}/trust", s.videoTrustRecord)
 	mux.HandleFunc("GET /api/v1/shorts", s.shorts)
 	mux.HandleFunc("GET /api/v1/search", s.search)
+	mux.HandleFunc("GET /api/v1/search/semantic", s.semanticSearch)
+	mux.HandleFunc("GET /api/v1/search/suggestions", s.searchSuggestions)
 	mux.HandleFunc("GET /api/v1/categories", s.categories)
+	mux.HandleFunc("GET /api/v1/channels", s.listChannels)
 	mux.HandleFunc("GET /api/v1/channels/demo", s.demoChannel)
 	mux.HandleFunc("GET /api/v1/channels/{id}", s.getChannel)
 	mux.HandleFunc("GET /api/v1/channels/{id}/videos", s.channelVideos)
@@ -95,6 +121,14 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/me/subscriptions", s.listSubscriptions)
 	mux.HandleFunc("GET /api/v1/me/feed", s.subscriptionFeed)
 	mux.HandleFunc("GET /api/v1/me/library", s.library)
+	mux.HandleFunc("GET /api/v1/me/playlists", s.listMyPlaylists)
+	mux.HandleFunc("POST /api/v1/me/playlists", s.createPlaylist)
+	mux.HandleFunc("GET /api/v1/playlists/{id}", s.getPlaylist)
+	mux.HandleFunc("PATCH /api/v1/playlists/{id}", s.updatePlaylist)
+	mux.HandleFunc("DELETE /api/v1/playlists/{id}", s.deletePlaylist)
+	mux.HandleFunc("GET /api/v1/playlists/{id}/videos", s.listPlaylistItems)
+	mux.HandleFunc("POST /api/v1/playlists/{id}/videos", s.addPlaylistItem)
+	mux.HandleFunc("DELETE /api/v1/playlists/{id}/videos/{video_id}", s.removePlaylistItem)
 	mux.HandleFunc("DELETE /api/v1/me/history", s.clearHistory)
 	mux.HandleFunc("GET /api/v1/me/notifications", s.listNotifications)
 	mux.HandleFunc("GET /api/v1/me/notifications/unread-count", s.unreadNotificationCount)
@@ -117,14 +151,23 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/videos/{id}/comments", s.createComment)
 	mux.HandleFunc("POST /api/v1/comments/{id}/like", s.likeComment)
 	mux.HandleFunc("DELETE /api/v1/comments/{id}/like", s.unlikeComment)
+	mux.HandleFunc("POST /api/v1/reports", s.createReport)
+	mux.HandleFunc("GET /api/v1/reports/{id}", s.getReport)
+	mux.HandleFunc("GET /api/v1/me/reports", s.listMyReports)
 
 	mux.HandleFunc("GET /api/v1/studio/channel", s.studioChannel)
+	mux.HandleFunc("PATCH /api/v1/studio/channel", s.updateStudioChannel)
 	mux.HandleFunc("GET /api/v1/studio/videos", s.listStudioVideos)
 	mux.HandleFunc("POST /api/v1/studio/videos", s.createStudioVideo)
 	mux.HandleFunc("GET /api/v1/studio/videos/{id}", s.getStudioVideo)
 	mux.HandleFunc("PATCH /api/v1/studio/videos/{id}", s.updateStudioVideo)
 	mux.HandleFunc("POST /api/v1/studio/videos/{id}/publish", s.publishStudioVideo)
 	mux.HandleFunc("POST /api/v1/studio/videos/{id}/unpublish", s.unpublishStudioVideo)
+	mux.HandleFunc("DELETE /api/v1/studio/videos/{id}", s.archiveStudioVideo)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/restore", s.restoreStudioVideo)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/purge", s.purgeStudioVideo)
+	mux.HandleFunc("POST /api/v1/studio/videos/{id}/schedule", s.scheduleStudioVideo)
+	mux.HandleFunc("DELETE /api/v1/studio/videos/{id}/schedule", s.clearStudioSchedule)
 	mux.HandleFunc("GET /api/v1/studio/videos/{id}/versions", s.listStudioVersions)
 	mux.HandleFunc("POST /api/v1/studio/videos/{id}/versions", s.createStudioVersion)
 	mux.HandleFunc("GET /api/v1/studio/videos/{id}/versions/{version_id}", s.getStudioVersion)
@@ -135,10 +178,18 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/studio/videos/{id}/subtitles/{track_id}/complete", s.completeStudioSubtitle)
 	mux.HandleFunc("DELETE /api/v1/studio/videos/{id}/subtitles/{track_id}", s.deleteStudioSubtitle)
 	mux.HandleFunc("GET /api/v1/studio/stats", s.studioStats)
+	mux.HandleFunc("GET /api/v1/studio/comments", s.studioComments)
+	mux.HandleFunc("POST /api/v1/studio/comments/{id}/pin", s.pinStudioComment)
+	mux.HandleFunc("DELETE /api/v1/studio/comments/{id}/pin", s.unpinStudioComment)
+	mux.HandleFunc("DELETE /api/v1/studio/comments/{id}", s.removeStudioComment)
+	mux.HandleFunc("GET /api/v1/studio/monetization", s.studioMonetization)
+	mux.HandleFunc("GET /api/v1/studio/earnings", s.studioEarnings)
+	mux.HandleFunc("GET /api/v1/studio/payouts", s.studioPayouts)
 	mux.HandleFunc("GET /api/v1/studio/analytics/summary", s.studioAnalyticsSummary)
 	mux.HandleFunc("GET /api/v1/studio/analytics/timeseries", s.studioAnalyticsTimeseries)
 	mux.HandleFunc("GET /api/v1/studio/videos/{id}/analytics", s.studioVideoAnalytics)
 	mux.HandleFunc("POST /api/v1/studio/uploads", s.createStudioUpload)
+	mux.HandleFunc("GET /api/v1/studio/uploads", s.listStudioUploads)
 	mux.HandleFunc("GET /api/v1/studio/uploads/{id}", s.getStudioUpload)
 	mux.HandleFunc("GET /api/v1/studio/uploads/{id}/scans", s.listStudioUploadScans)
 	mux.HandleFunc("POST /api/v1/studio/uploads/{id}/parts", s.refreshStudioUploadParts)
@@ -167,6 +218,12 @@ func New(options Options) http.Handler {
 
 	if s.internalToken != "" {
 		mux.HandleFunc("POST /internal/v1/notifications", s.ingestNotification)
+		mux.HandleFunc("POST /internal/v1/finance/payouts", s.ingestFinancePayout)
+		mux.HandleFunc("GET /internal/v1/federation", s.federationSnapshot)
+		mux.HandleFunc("POST /internal/v1/federation/follow", s.federationFollow)
+		mux.HandleFunc("POST /internal/v1/federation/unfollow", s.federationUnfollow)
+		mux.HandleFunc("POST /internal/v1/federation/peers/status", s.federationPeerStatus)
+		mux.HandleFunc("POST /internal/v1/federation/deliveries/process", s.federationProcessDeliveries)
 	}
 
 	if s.identity != nil {
@@ -179,6 +236,14 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("GET /api/v1/auth/csrf", s.csrf)
 		mux.HandleFunc("POST /api/v1/auth/forgot-password", s.forgotPassword)
 		mux.HandleFunc("POST /api/v1/auth/reset-password", s.resetPassword)
+		mux.HandleFunc("GET /api/v1/auth/social/providers", s.socialProviders)
+		mux.HandleFunc("GET /api/v1/auth/social/{provider}/start", s.socialStart)
+		mux.HandleFunc("GET /api/v1/auth/social/{provider}/callback", s.socialCallback)
+		mux.HandleFunc("POST /api/v1/auth/social/{provider}/callback", s.socialCallback)
+		mux.HandleFunc("POST /api/v1/me/password", s.changePassword)
+		mux.HandleFunc("GET /api/v1/me/sessions", s.listSessions)
+		mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
+		mux.HandleFunc("POST /api/v1/me/sessions/revoke-others", s.revokeOtherSessions)
 	}
 
 	return withCORS(withCSRF(mux, s.identity), options.Origins)

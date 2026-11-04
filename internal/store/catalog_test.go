@@ -206,7 +206,7 @@ func TestCatalogSearch(t *testing.T) {
 	st := newCatalogStore(t)
 	ctx := context.Background()
 
-	videos, total, err := st.SearchVideos(ctx, "lighthouse", "", 20, 0)
+	videos, total, err := st.SearchVideos(ctx, "lighthouse", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("search videos: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestCatalogSearch(t *testing.T) {
 		t.Fatalf("unexpected lighthouse results: total=%d %+v", total, videos)
 	}
 
-	keelVideos, total, err := st.SearchVideos(ctx, "keel", "", 20, 0)
+	keelVideos, total, err := st.SearchVideos(ctx, "keel", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("search keel videos: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestCatalogSearch(t *testing.T) {
 		t.Fatalf("unexpected keel video results: total=%d %+v", total, keelVideos)
 	}
 
-	wildcard, total, err := st.SearchVideos(ctx, "%", "", 20, 0)
+	wildcard, total, err := st.SearchVideos(ctx, "%", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("search wildcard: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestCatalogSearch(t *testing.T) {
 		t.Fatalf("expected wildcard to be literal, got total=%d %+v", total, wildcard)
 	}
 
-	moderation, total, err := st.SearchVideos(ctx, "moderation", "", 20, 0)
+	moderation, total, err := st.SearchVideos(ctx, "moderation", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("search moderation videos: %v", err)
 	}

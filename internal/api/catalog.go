@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
 	"github.com/keel-foundation/keel-core/internal/discovery"
@@ -434,6 +435,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
 	videos := []store.Video{}
 	totalVideos := 0
 	if searchType != "channels" {
@@ -444,7 +446,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		case "shorts":
 			format = "short"
 		}
-		videos, totalVideos, err = s.store.SearchVideos(r.Context(), query, format, limit, offset)
+		videos, totalVideos, err = s.store.SearchVideos(r.Context(), query, format, channelID, limit, offset)
 		if err != nil {
 			s.writeStoreError(w, err)
 			return
@@ -488,7 +490,10 @@ func (s *Server) categories(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ensureVideoAccess(w http.ResponseWriter, r *http.Request, video store.Video) bool {
 	if video.Status == "removed" {
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusGone, map[string]string{"detail": "This video was removed."})
+		writeJSON(w, http.StatusGone, map[string]any{
+			"detail": "This video was removed.",
+			"video":  newVideoTombstone(video),
+		})
 		return false
 	}
 	if isPublicVideo(video) ||
@@ -521,6 +526,43 @@ func (s *Server) ensureVideoAccess(w http.ResponseWriter, r *http.Request, video
 func isPublicVideo(video store.Video) bool {
 	return (video.Status == "published" || video.Status == "demonetized") &&
 		video.Visibility == "public"
+}
+
+// videoTombstone is the creator-safe public record for a removed video.
+// Playback URLs are intentionally omitted; the metadata needed to render the
+// removal notice and the trust record remains available.
+type videoTombstone struct {
+	ID              string        `json:"id"`
+	PublicID        string        `json:"public_id"`
+	ChannelID       string        `json:"channel_id"`
+	Title           string        `json:"title"`
+	Status          string        `json:"status"`
+	Visibility      string        `json:"visibility"`
+	ContentHash     string        `json:"content_hash"`
+	DurationSeconds int           `json:"duration_seconds"`
+	License         string        `json:"license"`
+	Policy          *store.Policy `json:"policy,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+	PublishedAt     *time.Time    `json:"published_at,omitempty"`
+	UpdatedAt       time.Time     `json:"updated_at"`
+}
+
+func newVideoTombstone(video store.Video) videoTombstone {
+	return videoTombstone{
+		ID:              video.ID,
+		PublicID:        video.PublicID,
+		ChannelID:       video.ChannelID,
+		Title:           video.Title,
+		Status:          video.Status,
+		Visibility:      video.Visibility,
+		ContentHash:     video.ContentHash,
+		DurationSeconds: video.DurationSeconds,
+		License:         video.License,
+		Policy:          video.Policy,
+		CreatedAt:       video.CreatedAt,
+		PublishedAt:     video.PublishedAt,
+		UpdatedAt:       video.UpdatedAt,
+	}
 }
 
 func setPublicCache(w http.ResponseWriter) {

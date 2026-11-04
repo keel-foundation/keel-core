@@ -16,6 +16,7 @@ import (
 	"github.com/keel-foundation/keel-core/internal/config"
 	"github.com/keel-foundation/keel-core/internal/db"
 	"github.com/keel-foundation/keel-core/internal/discovery"
+	"github.com/keel-foundation/keel-core/internal/federation"
 	"github.com/keel-foundation/keel-core/internal/identity"
 	"github.com/keel-foundation/keel-core/internal/mailer"
 	"github.com/keel-foundation/keel-core/internal/media"
@@ -144,6 +145,18 @@ func main() {
 
 	st := store.New(conn)
 	identityService := identity.New(st, mailerClient, identityConfig())
+	socialConfig, err := identity.SocialConfigFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("configure social sign-in: %v", err)
+	}
+	var socialService *identity.SocialService
+	if len(socialConfig.Providers) > 0 {
+		socialService = identity.NewSocialService(st, identityService, socialConfig)
+	}
+	federationService, err := federation.New(ctx, st, federation.ConfigFromEnv(os.Getenv))
+	if err != nil {
+		log.Fatalf("configure federation: %v", err)
+	}
 	notificationService := notifications.New(st)
 	discoveryEngine := discovery.NewEngine(
 		st,
@@ -161,6 +174,7 @@ func main() {
 		config.EnvOrDefault("KEELTUBE_MODERATION_CLAIMS_AUDIENCE", "keel-moderation"),
 		moderationClaimsTTL,
 	)
+	moderationClient.WithSignalToken(os.Getenv("KEELTUBE_MODERATION_SIGNAL_TOKEN"))
 
 	mediaConfig, err := media.FromEnv(os.Getenv)
 	if err != nil {
@@ -198,10 +212,13 @@ func main() {
 			Store:         st,
 			Auth:          authenticator,
 			Identity:      identityService,
+			Social:        socialService,
 			Discovery:     discoveryEngine,
+			Reranker:      discovery.RerankerFromEnv(os.Getenv),
 			Notifications: notificationService,
 			Moderation:    moderationClient,
 			Media:         studioMedia,
+			Federation:    federationService,
 			InternalToken: strings.TrimSpace(os.Getenv("KEELTUBE_INTERNAL_TOKEN")),
 			Origins:       allowedOrigins(),
 			RateLimit:     authRateLimit,
@@ -219,6 +236,8 @@ func main() {
 	// Media workers run in cmd/worker. The API process only signs uploads and
 	// serves playback metadata, so scaling HTTP replicas never multiplies FFmpeg.
 	go startTelemetryRetention(runCtx, st, analyticsRetentionDays)
+	go startScheduledPublisher(runCtx, st, discoveryEngine, notificationService, federationService)
+	go startFederationDeliveries(runCtx, federationService)
 
 	go func() {
 		<-runCtx.Done()
@@ -230,5 +249,71 @@ func main() {
 	log.Printf("keeltube core listening on %s", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+func startScheduledPublisher(
+	ctx context.Context,
+	st *store.Store,
+	discoveryEngine *discovery.Engine,
+	notificationService *notifications.Service,
+	federationService *federation.Service,
+) {
+	publish := func() {
+		publishCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		videos, err := st.PublishScheduledVideos(publishCtx, time.Now().UTC())
+		if err != nil {
+			log.Printf("scheduled publish: %v", err)
+			return
+		}
+		for _, video := range videos {
+			if discoveryEngine != nil {
+				if err := discoveryEngine.RefreshVideo(publishCtx, video.ID); err != nil {
+					log.Printf("scheduled publish: refresh %s: %v", video.ID, err)
+				}
+			}
+			if notificationService != nil {
+				if err := notificationService.VideoPublished(publishCtx, video.ID); err != nil {
+					log.Printf("scheduled publish: notify %s: %v", video.ID, err)
+				}
+			}
+			if federationService != nil {
+				federationService.PublishVideo(publishCtx, video)
+			}
+		}
+	}
+	publish()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			publish()
+		}
+	}
+}
+
+func startFederationDeliveries(ctx context.Context, service *federation.Service) {
+	if service == nil {
+		return
+	}
+	process := func() {
+		deliveryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		service.ProcessDeliveries(deliveryCtx, 20)
+	}
+	process()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			process()
+		}
 	}
 }

@@ -292,3 +292,61 @@ func TestAuthSessionRequiresValidCookie(t *testing.T) {
 		t.Fatalf("bogus session: expected 401, got %d", bogus.Code)
 	}
 }
+
+func TestPasswordChangeAndSessionManagement(t *testing.T) {
+	handler := newHandler(t, "dev-token")
+	password := testPassword(t)
+	newPassword := testPassword(t)
+	_, cookies := registerAndVerify(t, handler, "session@example.com", password)
+	csrf := findCookie(cookies, "keeltube_csrf")
+	if csrf == nil {
+		t.Fatal("missing csrf cookie")
+	}
+
+	sessions := getWithCookies(t, handler, "/api/v1/me/sessions", cookies)
+	if sessions.Code != http.StatusOK {
+		t.Fatalf("sessions: expected 200, got %d: %s", sessions.Code, sessions.Body.String())
+	}
+	sessionPage := decode[struct {
+		Items []identity.SessionInfo `json:"items"`
+	}](t, sessions)
+	if len(sessionPage.Items) != 1 || !sessionPage.Items[0].Current {
+		t.Fatalf("unexpected sessions: %+v", sessionPage.Items)
+	}
+
+	changed := postJSON(t, handler, "/api/v1/me/password", map[string]string{
+		"current_password": password,
+		"new_password":     newPassword,
+	}, cookies, csrf.Value)
+	if changed.Code != http.StatusNoContent {
+		t.Fatalf("change password: expected 204, got %d: %s", changed.Code, changed.Body.String())
+	}
+
+	login := postJSON(t, handler, "/api/v1/auth/login", map[string]string{
+		"email":    "session@example.com",
+		"password": newPassword,
+	}, nil, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login with new password: expected 200, got %d: %s", login.Code, login.Body.String())
+	}
+
+	revokeOthers := postJSON(t, handler, "/api/v1/me/sessions/revoke-others", nil, cookies, csrf.Value)
+	if revokeOthers.Code != http.StatusNoContent {
+		t.Fatalf("revoke others: expected 204, got %d: %s", revokeOthers.Code, revokeOthers.Body.String())
+	}
+
+	sessionID := sessionPage.Items[0].ID
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/me/sessions/"+sessionID, nil)
+	for _, cookie := range cookies {
+		deleteReq.AddCookie(cookie)
+	}
+	deleteReq.Header.Set("X-CSRF-Token", csrf.Value)
+	deleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("revoke session: expected 204, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if rec := getWithCookies(t, handler, "/api/v1/me", cookies); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session should be unauthorized, got %d", rec.Code)
+	}
+}

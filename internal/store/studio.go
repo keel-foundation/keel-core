@@ -37,6 +37,7 @@ type StudioVideoFilter struct {
 	Visibility string
 	Format     string
 	Category   string
+	Query      string
 	Sort       string
 	Limit      int
 	Offset     int
@@ -180,6 +181,7 @@ type StudioStats struct {
 	Likes             int64   `json:"likes"`
 	Comments          int64   `json:"comments"`
 	Subscribers       int64   `json:"subscribers"`
+	Revenue           float64 `json:"revenue"`
 	AnalyticsViews    int64   `json:"analytics_views"`
 	AnalyticsSessions int64   `json:"analytics_sessions"`
 	WatchSeconds      float64 `json:"watch_seconds"`
@@ -277,6 +279,13 @@ func (s *Store) ListStudioVideos(ctx context.Context, channelID string, filter S
 	if filter.Category != "" {
 		args = append(args, filter.Category)
 		clauses = append(clauses, fmt.Sprintf("category = $%d", len(args)))
+	}
+	if filter.Query != "" {
+		args = append(args, filter.Query)
+		clauses = append(clauses, fmt.Sprintf(
+			"(strpos(lower(title), lower($%d)) > 0 OR strpos(lower(coalesce(description, '')), lower($%d)) > 0 OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag WHERE strpos(lower(tag), lower($%d)) > 0))",
+			len(args), len(args), len(args),
+		))
 	}
 	where := strings.Join(clauses, " AND ")
 	var total int
@@ -1284,5 +1293,382 @@ func (s *Store) SetVideoStatus(ctx context.Context, videoID, status string, at t
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE videos SET status = $2, updated_at = $3 WHERE id = $1
 	`, videoID, status, at)
+	return err
+}
+
+func (s *Store) ListUploads(ctx context.Context, channelID, status string, limit, offset int) ([]UploadIntent, int, error) {
+	clauses := []string{"channel_id = $1"}
+	args := []any{channelID}
+	if status != "" {
+		args = append(args, status)
+		clauses = append(clauses, "status = $2")
+	}
+	where := strings.Join(clauses, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM media_uploads WHERE `+where, args...,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	limitPlaceholder := len(args) + 1
+	offsetPlaceholder := len(args) + 2
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+uploadColumns+`
+		FROM media_uploads
+		WHERE `+where+`
+		ORDER BY created_at DESC, id DESC
+		LIMIT $`+fmt.Sprint(limitPlaceholder)+` OFFSET $`+fmt.Sprint(offsetPlaceholder)+`
+	`, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	uploads := make([]UploadIntent, 0, limit)
+	for rows.Next() {
+		upload, err := scanUpload(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		uploads = append(uploads, upload)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return uploads, total, nil
+}
+
+func (s *Store) ArchiveStudioVideo(ctx context.Context, channelID, id string, at time.Time) (Video, error) {
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE videos
+		SET status = 'archived', visibility = 'private',
+		    archived_at = $3, scheduled_at = NULL, updated_at = $3
+		WHERE channel_id = $1 AND (id = $2 OR public_id = $2)
+		  AND status <> 'archived'
+		RETURNING `+videoColumns,
+		channelID, id, at,
+	)
+	video, err := scanVideo(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, getErr := s.GetStudioVideo(ctx, channelID, id); getErr != nil {
+			return Video{}, getErr
+		}
+		return Video{}, ErrInvalidState
+	}
+	return video, err
+}
+
+func (s *Store) RestoreStudioVideo(ctx context.Context, channelID, id string, at time.Time) (Video, error) {
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE videos
+		SET status = 'draft', visibility = 'private',
+		    archived_at = NULL, updated_at = $3
+		WHERE channel_id = $1 AND (id = $2 OR public_id = $2)
+		  AND status = 'archived'
+		RETURNING `+videoColumns,
+		channelID, id, at,
+	)
+	video, err := scanVideo(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, getErr := s.GetStudioVideo(ctx, channelID, id); getErr != nil {
+			return Video{}, getErr
+		}
+		return Video{}, ErrInvalidState
+	}
+	return video, err
+}
+
+func (s *Store) ScheduleStudioVideo(
+	ctx context.Context,
+	channelID, id string,
+	scheduledAt, at time.Time,
+) (Video, error) {
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE videos
+		SET scheduled_at = $3, updated_at = $4
+		WHERE channel_id = $1 AND (id = $2 OR public_id = $2)
+		  AND status IN ('draft', 'processing')
+		  AND archived_at IS NULL
+		RETURNING `+videoColumns,
+		channelID, id, scheduledAt, at,
+	)
+	video, err := scanVideo(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, getErr := s.GetStudioVideo(ctx, channelID, id); getErr != nil {
+			return Video{}, getErr
+		}
+		return Video{}, ErrInvalidState
+	}
+	return video, err
+}
+
+func (s *Store) ClearStudioSchedule(ctx context.Context, channelID, id string, at time.Time) (Video, error) {
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE videos
+		SET scheduled_at = NULL, updated_at = $3
+		WHERE channel_id = $1 AND (id = $2 OR public_id = $2)
+		RETURNING `+videoColumns,
+		channelID, id, at,
+	)
+	video, err := scanVideo(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, getErr := s.GetStudioVideo(ctx, channelID, id); getErr != nil {
+			return Video{}, getErr
+		}
+		return Video{}, ErrNotFound
+	}
+	return video, err
+}
+
+func (s *Store) PublishScheduledVideos(ctx context.Context, now time.Time) ([]Video, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		UPDATE videos
+		SET status = 'published',
+		    published_at = COALESCE(published_at, $1),
+		    scheduled_at = NULL,
+		    updated_at = $1
+		WHERE scheduled_at IS NOT NULL AND scheduled_at <= $1
+		  AND status IN ('draft', 'processing')
+		  AND (COALESCE(playback->>'mp4_url', '') <> '' OR COALESCE(playback->>'hls_url', '') <> '')
+		  AND COALESCE(policy->>'scan_verdict', '') NOT IN ('review', 'block')
+		  AND COALESCE(policy->>'upload_status', '') NOT IN ('review', 'blocked')
+		RETURNING `+videoColumns,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	videos := make([]Video, 0)
+	for rows.Next() {
+		video, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		videos = append(videos, video)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return videos, nil
+}
+
+var (
+	ErrPurgeBusy   = errors.New("video cannot be purged while media work is active")
+	ErrNotArchived = errors.New("only archived videos can be purged")
+)
+
+type VideoPurgePlan struct {
+	Video     Video
+	Assets    []MediaAsset
+	Subtitles []SubtitleTrack
+	Uploads   []UploadIntent
+}
+
+type MediaPurge struct {
+	ID          string
+	VideoID     string
+	PublicID    string
+	ChannelID   string
+	ActorID     string
+	ObjectCount int
+	PurgedAt    time.Time
+}
+
+// PrepareVideoPurge locks an archived, creator-owned video and removes queued
+// media jobs so no worker can start new processing while object storage is
+// being destroyed. Running jobs and active uploads return ErrPurgeBusy.
+func (s *Store) PrepareVideoPurge(ctx context.Context, channelID, id string) (VideoPurgePlan, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT `+videoColumns+`
+		FROM videos
+		WHERE channel_id = $1 AND (id = $2 OR public_id = $2)
+		FOR UPDATE
+	`, channelID, id)
+	video, err := scanVideo(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return VideoPurgePlan{}, ErrNotFound
+	}
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	if video.Status != "archived" {
+		return VideoPurgePlan{}, ErrNotArchived
+	}
+
+	lockedJobs, err := tx.QueryContext(ctx, `
+		SELECT id FROM media_jobs WHERE video_id = $1 FOR UPDATE
+	`, video.ID)
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	_ = lockedJobs.Close()
+
+	var runningJobs int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM media_jobs WHERE video_id = $1 AND status = 'running'
+	`, video.ID).Scan(&runningJobs); err != nil {
+		return VideoPurgePlan{}, err
+	}
+	if runningJobs > 0 {
+		return VideoPurgePlan{}, ErrPurgeBusy
+	}
+	var activeUploads int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM media_uploads
+		WHERE video_id = $1 AND status IN ('pending', 'uploading', 'scanning', 'processing')
+	`, video.ID).Scan(&activeUploads); err != nil {
+		return VideoPurgePlan{}, err
+	}
+	if activeUploads > 0 {
+		return VideoPurgePlan{}, ErrPurgeBusy
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM media_jobs WHERE video_id = $1`, video.ID); err != nil {
+		return VideoPurgePlan{}, err
+	}
+
+	assets, err := purgeAssets(ctx, tx, video.ID)
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	subtitles, err := purgeSubtitles(ctx, tx, video.ID)
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	uploads, err := purgeUploads(ctx, tx, video.ID)
+	if err != nil {
+		return VideoPurgePlan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return VideoPurgePlan{}, err
+	}
+	return VideoPurgePlan{
+		Video:     video,
+		Assets:    assets,
+		Subtitles: subtitles,
+		Uploads:   uploads,
+	}, nil
+}
+
+func purgeAssets(ctx context.Context, tx *sql.Tx, videoID string) ([]MediaAsset, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT `+assetColumns+` FROM media_assets WHERE video_id = $1 ORDER BY kind
+	`, videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	assets := make([]MediaAsset, 0)
+	for rows.Next() {
+		var asset MediaAsset
+		if err := rows.Scan(
+			&asset.VideoID, &asset.Kind, &asset.ObjectKey, &asset.ContentType,
+			&asset.SizeBytes, &asset.CreatedAt, &asset.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		assets = append(assets, asset)
+	}
+	return assets, rows.Err()
+}
+
+func purgeSubtitles(ctx context.Context, tx *sql.Tx, videoID string) ([]SubtitleTrack, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT `+subtitleColumns+` FROM video_subtitles WHERE video_id = $1 ORDER BY created_at
+	`, videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	subtitles := make([]SubtitleTrack, 0)
+	for rows.Next() {
+		track, err := scanSubtitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		subtitles = append(subtitles, track)
+	}
+	return subtitles, rows.Err()
+}
+
+func purgeUploads(ctx context.Context, tx *sql.Tx, videoID string) ([]UploadIntent, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT `+uploadColumns+` FROM media_uploads WHERE video_id = $1 ORDER BY created_at
+	`, videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	uploads := make([]UploadIntent, 0)
+	for rows.Next() {
+		upload, err := scanUpload(rows)
+		if err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, upload)
+	}
+	return uploads, rows.Err()
+}
+
+// DeletePurgedVideo removes the video and every child row. Object storage must
+// be cleaned first; this method only deletes database state.
+func (s *Store) DeletePurgedVideo(ctx context.Context, channelID, videoID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var runningJobs int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM media_jobs WHERE video_id = $1 AND status = 'running'
+	`, videoID).Scan(&runningJobs); err != nil {
+		return err
+	}
+	if runningJobs > 0 {
+		return ErrPurgeBusy
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM media_jobs WHERE video_id = $1`, videoID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM videos WHERE id = $1 AND channel_id = $2
+	`, videoID, channelID)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *Store) RecordMediaPurge(ctx context.Context, purge MediaPurge) error {
+	if purge.ID == "" {
+		id, err := NewID("purge_")
+		if err != nil {
+			return err
+		}
+		purge.ID = id
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO media_purges (
+			id, video_id, public_id, channel_id, actor_id, object_count, purged_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, purge.ID, purge.VideoID, purge.PublicID, purge.ChannelID, purge.ActorID,
+		purge.ObjectCount, purge.PurgedAt)
 	return err
 }
