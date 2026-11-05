@@ -133,6 +133,18 @@ func (s *Store) GetAccountByID(ctx context.Context, id string) (Account, error) 
 	return scanAccount(row)
 }
 
+func (s *Store) GetAccountByActorID(ctx context.Context, actorID string) (Account, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, actor_id, email, password_hash, email_verified_at,
+		       failed_login_count, locked_until, created_at, updated_at
+		FROM accounts
+		WHERE actor_id = $1
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, actorID)
+	return scanAccount(row)
+}
+
 func scanAccount(row *sql.Row) (Account, error) {
 	var account Account
 	var verifiedAt, lockedUntil sql.NullTime

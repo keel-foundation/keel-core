@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/billing"
 	"github.com/keel-foundation/keel-core/internal/discovery"
 	"github.com/keel-foundation/keel-core/internal/federation"
 	"github.com/keel-foundation/keel-core/internal/identity"
@@ -27,6 +28,7 @@ type Options struct {
 	Notifications *notifications.Service
 	Moderation    moderation.Service
 	Media         StudioMedia
+	Billing       *billing.Service
 	Federation    *federation.Service
 	InternalToken string
 	Origins       []string
@@ -45,6 +47,7 @@ type Server struct {
 	notifications *notifications.Service
 	moderation    moderation.Service
 	media         StudioMedia
+	billing       *billing.Service
 	federation    *federation.Service
 	internalToken string
 	limiter       *rateLimiter
@@ -78,6 +81,7 @@ func New(options Options) http.Handler {
 		notifications: notificationService,
 		moderation:    options.Moderation,
 		media:         options.Media,
+		billing:       options.Billing,
 		federation:    options.Federation,
 		internalToken: options.InternalToken,
 		trustProxy:    options.TrustProxy,
@@ -185,6 +189,11 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/studio/monetization", s.studioMonetization)
 	mux.HandleFunc("GET /api/v1/studio/earnings", s.studioEarnings)
 	mux.HandleFunc("GET /api/v1/studio/payouts", s.studioPayouts)
+	mux.HandleFunc("GET /api/v1/studio/billing/account", s.billingAccount)
+	mux.HandleFunc("POST /api/v1/studio/billing/account", s.createBillingAccount)
+	mux.HandleFunc("POST /api/v1/studio/billing/account/link", s.refreshBillingAccountLink)
+	mux.HandleFunc("POST /api/v1/studio/billing/account/sync", s.syncBillingAccount)
+	mux.HandleFunc("POST /webhooks/stripe", s.stripeWebhook)
 	mux.HandleFunc("GET /api/v1/studio/analytics/summary", s.studioAnalyticsSummary)
 	mux.HandleFunc("GET /api/v1/studio/analytics/timeseries", s.studioAnalyticsTimeseries)
 	mux.HandleFunc("GET /api/v1/studio/videos/{id}/analytics", s.studioVideoAnalytics)
@@ -219,6 +228,7 @@ func New(options Options) http.Handler {
 	if s.internalToken != "" {
 		mux.HandleFunc("POST /internal/v1/notifications", s.ingestNotification)
 		mux.HandleFunc("POST /internal/v1/finance/payouts", s.ingestFinancePayout)
+		mux.HandleFunc("POST /internal/v1/billing/settlements", s.settleCreatorPayout)
 		mux.HandleFunc("GET /internal/v1/federation", s.federationSnapshot)
 		mux.HandleFunc("POST /internal/v1/federation/follow", s.federationFollow)
 		mux.HandleFunc("POST /internal/v1/federation/unfollow", s.federationUnfollow)

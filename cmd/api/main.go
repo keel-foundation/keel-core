@@ -13,6 +13,7 @@ import (
 
 	"github.com/keel-foundation/keel-core/internal/api"
 	"github.com/keel-foundation/keel-core/internal/auth"
+	"github.com/keel-foundation/keel-core/internal/billing"
 	"github.com/keel-foundation/keel-core/internal/config"
 	"github.com/keel-foundation/keel-core/internal/db"
 	"github.com/keel-foundation/keel-core/internal/discovery"
@@ -158,6 +159,10 @@ func main() {
 		log.Fatalf("configure federation: %v", err)
 	}
 	notificationService := notifications.New(st)
+	billingService, err := billing.FromEnv(st, os.Getenv)
+	if err != nil {
+		log.Fatalf("configure billing: %v", err)
+	}
 	discoveryEngine := discovery.NewEngine(
 		st,
 		discovery.EmbedderFromEnv(os.Getenv),
@@ -218,6 +223,7 @@ func main() {
 			Notifications: notificationService,
 			Moderation:    moderationClient,
 			Media:         studioMedia,
+			Billing:       billingService,
 			Federation:    federationService,
 			InternalToken: strings.TrimSpace(os.Getenv("KEELTUBE_INTERNAL_TOKEN")),
 			Origins:       allowedOrigins(),

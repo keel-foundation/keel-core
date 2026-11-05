@@ -13,7 +13,8 @@ OIDC/OAuth sign-in for Google, Apple, and X, including account linking and PKCE,
 
 `gofmt -l .`, `go vet ./...`, and `go test -p 1 ./...` pass against PostgreSQL + pgvector. The
 remaining UAT integration work is the `keel-web` data adapter; production classifier models,
-externally anchored moderation ledgers, and real billing/payout execution are future work.
+externally anchored moderation ledgers, viewer billing, and automatic settlement scheduling are
+future work.
 
 ## Configuration
 
@@ -81,7 +82,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_RERANKER_MODEL` | unset | Optional reranker model identifier |
 | `KEELTUBE_RERANKER_TIMEOUT_SECONDS` | `5` | Reranker request timeout |
 | `KEELTUBE_ANALYTICS_RETENTION_DAYS` | `90` | Raw view/discovery event retention; daily aggregates remain |
-| `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for the internal notification-ingest endpoint; unset disables the route |
+| `KEELTUBE_INTERNAL_TOKEN` | unset | Optional bearer token for internal routes, including notifications and billing settlement |
 | `KEELTUBE_MODERATION_URL` | unset | `keel-moderation` base URL; unset returns 503 from the creator moderation gateway |
 | `KEELTUBE_MODERATION_TOKEN` | unset | Static server-side creator-role bearer token for `keel-moderation`; used only when claims are disabled |
 | `KEELTUBE_MODERATION_CLAIMS_SECRET` | unset | Shared HS256 secret for OIDC-style claims; at least 32 characters; enables claims mode |
@@ -90,6 +91,18 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MODERATION_CLAIMS_TTL_SECONDS` | `60` | Claims lifetime |
 | `KEELTUBE_MODERATION_TIMEOUT_SECONDS` | `10` | Timeout for a single moderation request |
 | `KEELTUBE_MODERATION_SIGNAL_TOKEN` | unset | Server-side token for viewer-report ingestion into `keel-moderation` `/v1/signals`; unset disables `POST /api/v1/reports` |
+| `KEELTUBE_STRIPE_SECRET_KEY` | unset | Stripe secret key; unset disables Stripe billing |
+| `KEELTUBE_STRIPE_PUBLISHABLE_KEY` | unset | Stripe publishable key for the web client |
+| `KEELTUBE_STRIPE_WEBHOOK_SECRET` | unset | Stripe webhook signing secret; unset disables the webhook route |
+| `KEELTUBE_STRIPE_API_BASE_URL` | `https://api.stripe.com` | Stripe API base URL |
+| `KEELTUBE_STRIPE_API_VERSION` | unset | Optional pinned Stripe API version |
+| `KEELTUBE_STRIPE_TIMEOUT_SECONDS` | `20` | Stripe API request timeout |
+| `KEELTUBE_STRIPE_CONNECT_COUNTRY` | `US` | Country for new Express accounts |
+| `KEELTUBE_STRIPE_CONNECT_REFRESH_URL` | `http://localhost:3000/studio/monetization?stripe=refresh` | Stripe onboarding refresh URL |
+| `KEELTUBE_STRIPE_CONNECT_RETURN_URL` | `http://localhost:3000/studio/monetization?stripe=return` | Stripe onboarding return URL |
+| `KEELTUBE_STRIPE_MIN_SETTLEMENT_CENTS` | `100` | Minimum settlement amount in cents |
+| `KEELTUBE_STRIPE_CURRENCY` | `usd` | Settlement currency |
+| `KEELTUBE_STRIPE_WEBHOOK_TOLERANCE_SECONDS` | `300` | Webhook timestamp tolerance |
 | `KEELTUBE_SEED_DEMO_EMAIL` | unset | Optional demo account email |
 | `KEELTUBE_SEED_DEMO_PASSWORD` | unset | Optional demo account password |
 | `KEELTUBE_MAIL_PROVIDER` | `mailtrap` | `smtp`, `mailtrap`, `mailgun`, or `log` |
@@ -393,19 +406,44 @@ KEELTUBE_OIDC_HMAC_SECRET=replace-with-at-least-32-characters
 KEELTUBE_OIDC_ALGORITHMS=HS256
 ```
 
-## Finance (read-only demo)
+## Billing and settlement
 
-The devstack seeds a read-only finance record for the demo channel. These endpoints are
-session-authenticated and channel-scoped:
+The finance API is read-only by default, and existing seeded records remain visible. Setting
+`KEELTUBE_STRIPE_SECRET_KEY` enables Stripe Connect onboarding and settlement; setting
+`KEELTUBE_STRIPE_WEBHOOK_SECRET` also enables webhook verification and account/transfer updates.
+Stripe test-mode credentials work with the same endpoints. The platform must have Connect enabled
+with the `card_payments` and `transfers` capabilities available for new accounts.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/studio/monetization` | Eligibility, RPM, holdback, balance, next payout |
 | `GET` | `/api/v1/studio/earnings` | Paginated earnings ledger |
 | `GET` | `/api/v1/studio/payouts` | Paginated payout history |
+| `GET` | `/api/v1/studio/billing/account` | Read the creator's Stripe Connect state |
+| `POST` | `/api/v1/studio/billing/account` | Create the Express account and onboarding link |
+| `POST` | `/api/v1/studio/billing/account/link` | Refresh the onboarding link |
+| `POST` | `/api/v1/studio/billing/account/sync` | Refresh account status from Stripe |
+| `POST` | `/internal/v1/billing/settlements` | Settle a channel balance through Stripe Connect |
+| `POST` | `/webhooks/stripe` | Verify and process Stripe webhooks |
 
-Real billing, settlement, and payout execution are future work. `GET /api/v1/studio/stats` includes
-the current balance as `revenue`.
+Settlement is idempotent per `channel_id` and `period` (`YYYY-MM`). The server reserves the available
+balance (`balance - holdback`), creates a Stripe transfer to the connected account with a stable
+idempotency key, and records the payout plus a negative earnings entry. A failed Stripe request
+restores the balance, records an adjustment, and can be retried; each attempt increments the payout
+`attempt` counter and uses a fresh Stripe idempotency key. `transfer.reversed` restores the balance
+and records a reversal; duplicate webhook events are ignored by event ID.
+
+Register the webhook endpoint with Stripe for `account.updated`, `transfer.created`,
+`transfer.updated`, and `transfer.reversed`. For local development, forward events with the Stripe
+CLI:
+
+```sh
+stripe listen --forward-to localhost:8080/webhooks/stripe
+```
+
+Use `POST /internal/v1/billing/settlements` with `KEELTUBE_INTERNAL_TOKEN` to execute a settlement.
+Viewer billing, subscriptions, tax handling, and automatic payout scheduling are not part of this
+module yet. `GET /api/v1/studio/stats` includes the current balance as `revenue`.
 
 ## Watch telemetry and creator analytics
 
@@ -581,7 +619,7 @@ Provider errors are not treated as approval; the job retries and eventually fail
 
 1. Wire the `keel-web` data adapters through its Cloudflare Worker BFF.
 2. Add direct OIDC token forwarding for non-core moderation clients.
-3. Add server-signed creator export bundles and monetization/payout integration.
+3. Add server-signed creator export bundles, viewer billing, and automatic settlement scheduling.
 4. Add production classifier models and public transparency aggregates.
 
 ## Licensing

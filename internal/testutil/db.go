@@ -33,6 +33,7 @@ func Open(t *testing.T) *sql.DB {
 		         oauth_states, account_identities,
 		         federation_inbox_activities, federation_deliveries, federation_following,
 		         federation_followers, federation_peers, federation_instance,
+		         creator_billing_accounts, stripe_webhook_events,
 		         creator_earnings, creator_payouts, creator_monetization,
 		         playlist_items, playlists, reports,
 		         video_subtitles, video_versions, media_uploads, media_blocklist,
