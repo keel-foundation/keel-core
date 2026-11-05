@@ -100,6 +100,7 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST /federation/actors/{id}/inbox", s.federationInbox)
 	mux.HandleFunc("GET /federation/videos/{id}", s.federationVideo)
 	mux.HandleFunc("GET /federation/policy", s.federationPolicy)
+	mux.HandleFunc("GET /api/v1/transparency", s.transparencyReport)
 	mux.HandleFunc("GET /api/v1/feed", s.feed)
 	mux.HandleFunc("GET /api/v1/explore", s.explore)
 	mux.HandleFunc("GET /api/v1/videos", s.listVideos)

@@ -12,6 +12,7 @@ type Config struct {
 	Bucket              string
 	Region              string
 	Endpoint            string
+	PublicEndpoint      string
 	AccessKeyID         string
 	SecretAccessKey     string
 	SessionToken        string
@@ -52,6 +53,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		Bucket:              bucket,
 		Region:              envOrDefault(getenv, "KEELTUBE_MEDIA_S3_REGION", "us-east-1"),
 		Endpoint:            endpoint,
+		PublicEndpoint:      strings.TrimSpace(getenv("KEELTUBE_MEDIA_S3_PUBLIC_ENDPOINT")),
 		AccessKeyID:         strings.TrimSpace(getenv("KEELTUBE_MEDIA_S3_ACCESS_KEY_ID")),
 		SecretAccessKey:     strings.TrimSpace(getenv("KEELTUBE_MEDIA_S3_SECRET_ACCESS_KEY")),
 		SessionToken:        strings.TrimSpace(getenv("KEELTUBE_MEDIA_S3_SESSION_TOKEN")),
@@ -110,6 +112,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if cfg.ScannerTimeout, err = durationEnv(getenv, "KEELTUBE_MEDIA_SCANNER_TIMEOUT_SECONDS", 10*time.Second); err != nil {
 		return Config{}, err
+	}
+	if cfg.PublicEndpoint == "" {
+		cfg.PublicEndpoint = cfg.Endpoint
 	}
 	if cfg.KeyPrefix == "" {
 		cfg.KeyPrefix = "media"

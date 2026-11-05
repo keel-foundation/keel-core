@@ -45,6 +45,7 @@ type Service interface {
 	FileAppeal(ctx context.Context, identity Identity, channelID, actionID, grounds, statement string) (*Response, error)
 	Report(ctx context.Context, channelID, subjectType, subjectID, reason, details, reporterID string) (*Response, error)
 	PublicVideoRecord(ctx context.Context, videoID string) (*Response, error)
+	Transparency(ctx context.Context, since, until string) (*Response, error)
 }
 
 // Response is a successful moderation response. The gateway forwards only the
@@ -187,6 +188,22 @@ func (c *Client) PublicVideoRecord(ctx context.Context, videoID string) (*Respon
 		"",
 		nil,
 	)
+}
+
+// Transparency returns the public moderation transparency report. It is
+// unauthenticated upstream and carries no creator or moderator credential.
+func (c *Client) Transparency(ctx context.Context, since, until string) (*Response, error) {
+	if !c.Enabled() {
+		return nil, ErrDisabled
+	}
+	query := url.Values{}
+	if since != "" {
+		query.Set("since", since)
+	}
+	if until != "" {
+		query.Set("until", until)
+	}
+	return c.doWithToken(ctx, http.MethodGet, "/v1/transparency", query, "", nil)
 }
 
 func (c *Client) Report(

@@ -12,9 +12,10 @@ federation, and the session-authenticated creator moderation gateway are impleme
 OIDC/OAuth sign-in for Google, Apple, and X, including account linking and PKCE, is implemented.
 
 `gofmt -l .`, `go vet ./...`, and `go test -p 1 ./...` pass against PostgreSQL + pgvector. The
-remaining UAT integration work is the `keel-web` data adapter; production classifier models,
-externally anchored moderation ledgers, viewer billing, and automatic settlement scheduling are
-future work.
+remaining UAT integration work is the `keel-web` data adapter. `keel-moderation` now ships a
+bundled model-based classifier and a public transparency report; core proxies the report at
+`GET /api/v1/transparency`. Externally anchored moderation ledgers, viewer billing, and automatic
+settlement scheduling remain future work.
 
 ## Configuration
 
@@ -48,6 +49,7 @@ service has no built-in credentials or connection defaults.
 | `KEELTUBE_MEDIA_S3_BUCKET` | unset | S3-compatible bucket; unset disables studio upload routes |
 | `KEELTUBE_MEDIA_S3_REGION` | `us-east-1` | Bucket region |
 | `KEELTUBE_MEDIA_S3_ENDPOINT` | unset | S3-compatible endpoint for MinIO/R2 |
+| `KEELTUBE_MEDIA_S3_PUBLIC_ENDPOINT` | internal endpoint | Endpoint used to sign browser-facing presigned URLs |
 | `KEELTUBE_MEDIA_S3_ACCESS_KEY_ID` | unset | Optional static S3 access key |
 | `KEELTUBE_MEDIA_S3_SECRET_ACCESS_KEY` | unset | Optional static S3 secret |
 | `KEELTUBE_MEDIA_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials |
@@ -388,6 +390,9 @@ client IP and does not require a session. Signed-in reporters can read their own
 `GET /api/v1/reports/{id}` and `GET /api/v1/me/reports`.
 
 `GET /api/v1/videos/{id}/trust` returns the public creator-safe moderation record for a video.
+`GET /api/v1/transparency?since=&until=` proxies the public moderation transparency report. It is
+unauthenticated, generated from the moderation workflow store and ledger, and returns `503` when the
+moderation service is not configured.
 Moderation events are pushed into the creator notification feed through the internal ingest route.
 
 For the claims path, configure both services with the same 32+ character secret:
@@ -595,6 +600,15 @@ with `0600` permissions, and cleans up temporary directories.
 ### Bucket requirements
 
 - Keep the bucket private. Do not grant public read.
+- When the internal S3 endpoint is not reachable by the browser (for example MinIO on a Compose
+  network), set `KEELTUBE_MEDIA_S3_PUBLIC_ENDPOINT` to the browser-facing endpoint. Core signs
+  browser URLs with the public endpoint while the worker continues to use the internal endpoint.
+- Cloudflare R2: use `https://<account-id>.r2.cloudflarestorage.com`, region `auto`, and
+  `KEELTUBE_MEDIA_S3_USE_PATH_STYLE=false`. Grant the token object read/write/delete and multipart
+  permissions for the bucket only. R2 has no bucket-level CORS requirement for presigned PUTs but
+  configure CORS for the web origin with `GET`, `HEAD`, `PUT`, and the `ETag` response header.
+- MinIO: set `KEELTUBE_MEDIA_S3_USE_PATH_STYLE=true`, keep the bucket private, and configure CORS
+  for the web origin. The devstack creates the private bucket automatically.
 - Grant the core identity `s3:CreateMultipartUpload`, `s3:UploadPart`, `s3:CompleteMultipartUpload`,
   `s3:AbortMultipartUpload`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and `s3:HeadObject`
   on the configured prefix.
@@ -620,7 +634,8 @@ Provider errors are not treated as approval; the job retries and eventually fail
 1. Wire the `keel-web` data adapters through its Cloudflare Worker BFF.
 2. Add direct OIDC token forwarding for non-core moderation clients.
 3. Add server-signed creator export bundles, viewer billing, and automatic settlement scheduling.
-4. Add production classifier models and public transparency aggregates.
+4. Deploy and calibrate a production transformer classifier and externally anchor the moderation
+   ledger. The baseline model and public transparency endpoint are already implemented.
 
 ## Licensing
 

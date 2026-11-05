@@ -63,17 +63,28 @@ func NewS3Storage(ctx context.Context, cfg Config) (*S3Storage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: load aws config: %v", ErrStorage, err)
 	}
-	client := s3.NewFromConfig(awsCfg, func(options *s3.Options) {
-		options.UsePathStyle = cfg.UsePathStyle
-		if cfg.Endpoint != "" {
-			options.BaseEndpoint = aws.String(cfg.Endpoint)
-		}
-	})
+	client := newS3Client(awsCfg, cfg.Endpoint, cfg.UsePathStyle)
+	presignClient := client
+	if cfg.PublicEndpoint != "" && cfg.PublicEndpoint != cfg.Endpoint {
+		presignClient = newS3Client(awsCfg, cfg.PublicEndpoint, cfg.UsePathStyle)
+	}
 	return &S3Storage{
 		client:    client,
-		presigner: s3.NewPresignClient(client),
+		presigner: s3.NewPresignClient(presignClient),
 		bucket:    cfg.Bucket,
 	}, nil
+}
+
+// newS3Client builds an S3 client for one endpoint. Operations use the internal
+// endpoint while presigned URLs use the public endpoint, so signature Host
+// headers match what the browser or worker connects to.
+func newS3Client(awsCfg aws.Config, endpoint string, usePathStyle bool) *s3.Client {
+	return s3.NewFromConfig(awsCfg, func(options *s3.Options) {
+		options.UsePathStyle = usePathStyle
+		if endpoint != "" {
+			options.BaseEndpoint = aws.String(endpoint)
+		}
+	})
 }
 
 func (s *S3Storage) CreateMultipartUpload(ctx context.Context, key, contentType string) (string, error) {

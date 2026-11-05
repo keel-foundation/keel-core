@@ -465,3 +465,32 @@ func TestCreatorModerationGatewayReturnsServiceUnavailableWhenUnconfigured(t *te
 		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPublicTransparencyProxy(t *testing.T) {
+	var gotPath, gotSince, gotAuthorization string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotSince = r.URL.Query().Get("since")
+		gotAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"schema_version":"transparency-0.1"}`))
+	}))
+	defer upstream.Close()
+
+	handler, _ := newModerationHandler(t, "dev-token", upstream.URL)
+	rec := moderationRequest(
+		t, handler, http.MethodGet, "/api/v1/transparency?since=2026-01-01", "", "",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/transparency" {
+		t.Fatalf("unexpected upstream path: %s", gotPath)
+	}
+	if gotSince != "2026-01-01" {
+		t.Fatalf("unexpected since query: %q", gotSince)
+	}
+	if gotAuthorization != "" {
+		t.Fatalf("transparency proxy must not send a credential: %q", gotAuthorization)
+	}
+}
